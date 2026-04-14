@@ -1,0 +1,7 @@
+package com.ratones.sifenwrapper.repository;
+
+import com.ratones.sifenwrapper.entity.AuditLog;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
+}
