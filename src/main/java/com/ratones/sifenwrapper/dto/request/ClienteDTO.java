@@ -6,6 +6,14 @@ import lombok.Data;
 public class ClienteDTO {
     private boolean contribuyente;
     private String ruc;
+    private Integer documentoTipo;
+    private String documentoNumero;
+    private Integer tipoDocumento;
+    private String numeroDocumento;
+    private Integer tipoDocumentoIdentidad;
+    private String numeroDocumentoIdentidad;
+    private Integer iTipIDRec;
+    private String dNumIDRec;
     private String razonSocial;
     private String nombreFantasia;
     private int tipoOperacion;

@@ -187,7 +187,13 @@ public class SifenMapper {
             receptor.setdDVRec(Short.parseShort(rucReceptor[1]));
         }
 
-        receptor.setdNomRec(cliente.getRazonSocial());
+        Integer tipoDocumentoReceptor = resolveTipoDocumentoReceptor(cliente);
+        if (tipoDocumentoReceptor != null) {
+            receptor.setiTipIDRec(TiTipDocRec.getByVal(tipoDocumentoReceptor.shortValue()));
+            receptor.setdNumIDRec(resolveNumeroDocumentoReceptor(cliente, tipoDocumentoReceptor));
+        }
+
+        receptor.setdNomRec(resolveNombreReceptor(cliente, tipoDocumentoReceptor));
         receptor.setdNomFanRec(cliente.getNombreFantasia());
         if (cliente.getTipoContribuyente() > 0) {
             receptor.setiTiContRec(TiTipCont.getByVal((short) cliente.getTipoContribuyente()));
@@ -212,6 +218,47 @@ public class SifenMapper {
         receptor.setdCodCliente(cliente.getCodigo());
 
         return receptor;
+    }
+
+    private Integer resolveTipoDocumentoReceptor(ClienteDTO cliente) {
+        if (cliente.getITipIDRec() != null) {
+            return cliente.getITipIDRec();
+        }
+        if (cliente.getTipoDocumentoIdentidad() != null) {
+            return cliente.getTipoDocumentoIdentidad();
+        }
+        if (cliente.getTipoDocumento() != null) {
+            return cliente.getTipoDocumento();
+        }
+        return cliente.getDocumentoTipo();
+    }
+
+    private String resolveNumeroDocumentoReceptor(ClienteDTO cliente, Integer tipoDocumentoReceptor) {
+        if (cliente.getDNumIDRec() != null && !cliente.getDNumIDRec().isBlank()) {
+            return cliente.getDNumIDRec();
+        }
+        if (cliente.getNumeroDocumentoIdentidad() != null && !cliente.getNumeroDocumentoIdentidad().isBlank()) {
+            return cliente.getNumeroDocumentoIdentidad();
+        }
+        if (cliente.getNumeroDocumento() != null && !cliente.getNumeroDocumento().isBlank()) {
+            return cliente.getNumeroDocumento();
+        }
+        if (cliente.getDocumentoNumero() != null && !cliente.getDocumentoNumero().isBlank()) {
+            return cliente.getDocumentoNumero();
+        }
+
+        // Innominado requiere dNumIDRec = "0".
+        if (tipoDocumentoReceptor != null && tipoDocumentoReceptor == 5) {
+            return "0";
+        }
+        return "0";
+    }
+
+    private String resolveNombreReceptor(ClienteDTO cliente, Integer tipoDocumentoReceptor) {
+        if (tipoDocumentoReceptor != null && tipoDocumentoReceptor == 5) {
+            return "Sin Nombre";
+        }
+        return cliente.getRazonSocial();
     }
 
     // ─── Datos específicos por tipo de DE ─────────────────────────────────────

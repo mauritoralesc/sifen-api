@@ -16,8 +16,10 @@ import com.roshka.sifen.core.fields.response.de.TxContenDE;
 import com.roshka.sifen.core.fields.response.event.TgResProcEVe;
 import com.roshka.sifen.core.types.*;
 import com.roshka.sifen.internal.ctx.GenerationCtx;
+import com.ratones.sifenwrapper.dto.request.ClienteDTO;
 import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
 import com.ratones.sifenwrapper.dto.request.EventoRequest;
+import com.ratones.sifenwrapper.dto.request.ItemDTO;
 import com.ratones.sifenwrapper.dto.request.KudeRequest;
 import com.ratones.sifenwrapper.dto.request.ParamsDTO;
 import com.ratones.sifenwrapper.dto.response.*;
@@ -30,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -44,6 +47,7 @@ import java.util.regex.Pattern;
 public class InvoiceService {
 
     private static final ZoneId PY_ZONE = ZoneId.of("America/Asuncion");
+    private static final BigDecimal MONTO_MAX_INNOMINADO = new BigDecimal("60000000");
 
     private final SifenConfigFactory sifenConfigFactory;
     private final CompanyService companyService;
@@ -57,6 +61,7 @@ public class InvoiceService {
         try {
             // Auto-fill params desde la config de la empresa si no vienen en el request
             request.setParams(resolveParams(request.getParams()));
+            validarReglasReceptor(request);
 
             log.info("Iniciando emisión de DE - Establecimiento: {}, Punto: {}, Número: {}",
                     request.getData().getEstablecimiento(),
@@ -94,6 +99,7 @@ public class InvoiceService {
     public PrepareInvoiceResponse prepararDE(EmitirFacturaRequest request) {
         try {
             request.setParams(resolveParams(request.getParams()));
+            validarReglasReceptor(request);
 
             log.info("[PREPARE] Preparando DE - Establecimiento: {}, Punto: {}, Número: {}",
                     request.getData().getEstablecimiento(),
@@ -267,6 +273,7 @@ public class InvoiceService {
             List<DocumentoElectronico> documentos = new ArrayList<>();
             for (EmitirFacturaRequest req : requests) {
                 req.setParams(resolveParams(req.getParams()));
+                validarReglasReceptor(req);
                 documentos.add(SifenMapper.toDocumentoElectronico(req));
             }
 
@@ -860,6 +867,57 @@ public class InvoiceService {
                 .totalBaseGravada(tot.getdTBasGraIVA())
                 .totalGuaranies(tot.getdTotalGs())
                 .build();
+    }
+
+    private void validarReglasReceptor(EmitirFacturaRequest request) {
+        if (request == null || request.getData() == null || request.getData().getCliente() == null) {
+            return;
+        }
+
+        ClienteDTO cliente = request.getData().getCliente();
+        Integer tipoDocReceptor = resolveTipoDocumentoReceptor(cliente);
+
+        // iNatRec = 2 (No Contribuyente): no debe enviarse RUC del receptor.
+        if (!cliente.isContribuyente() && cliente.getRuc() != null && !cliente.getRuc().isBlank()) {
+            throw new IllegalArgumentException("Para no contribuyente no debe informarse RUC del receptor");
+        }
+
+        // Innominado (iTipIDRec=5): permitido solo para total < 60.000.000.
+        if (tipoDocReceptor != null && tipoDocReceptor == 5) {
+            BigDecimal total = calcularTotalOperacion(request.getData().getItems());
+            if (total.compareTo(MONTO_MAX_INNOMINADO) >= 0) {
+                throw new IllegalArgumentException(
+                        "Factura innominada no permitida para montos >= 60.000.000 Gs (regla SIFEN 1321)");
+            }
+        }
+    }
+
+    private Integer resolveTipoDocumentoReceptor(ClienteDTO cliente) {
+        if (cliente.getITipIDRec() != null) {
+            return cliente.getITipIDRec();
+        }
+        if (cliente.getTipoDocumentoIdentidad() != null) {
+            return cliente.getTipoDocumentoIdentidad();
+        }
+        if (cliente.getTipoDocumento() != null) {
+            return cliente.getTipoDocumento();
+        }
+        return cliente.getDocumentoTipo();
+    }
+
+    private BigDecimal calcularTotalOperacion(List<ItemDTO> items) {
+        if (items == null || items.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal total = BigDecimal.ZERO;
+        for (ItemDTO item : items) {
+            BigDecimal cantidad = item.getCantidad() != null ? item.getCantidad() : BigDecimal.ONE;
+            BigDecimal precio = item.getPrecioUnitario() != null ? item.getPrecioUnitario() : BigDecimal.ZERO;
+            BigDecimal descuento = item.getDescuento() != null ? item.getDescuento() : BigDecimal.ZERO;
+            total = total.add(cantidad.multiply(precio).subtract(descuento));
+        }
+        return total;
     }
 
     private ConsultaRucResponse buildConsultaRucResponse(String ruc, RespuestaConsultaRUC respuesta) {

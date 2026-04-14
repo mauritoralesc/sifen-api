@@ -308,6 +308,40 @@ curl -X POST http://localhost:8000/invoices/prepare \
 
 > **Nota:** `params` es opcional si la empresa tiene emisor configurado vía `PUT /companies/{id}/emisor`.
 
+#### Caso no contribuyente (B2C) e innominado
+
+Cuando el cliente no tiene RUC válido (o no desea identificarse), emitir como no contribuyente con operación B2C:
+
+- `cliente.contribuyente`: `false` (D201 = 2)
+- `cliente.tipoOperacion`: `2` (D202 = B2C)
+- `cliente.pais`: `"PRY"` (D203) y descripción Paraguay (D204)
+- Para no contribuyente: **no enviar `cliente.ruc`**
+
+Para factura **innominada**:
+
+- `cliente.iTipIDRec`: `5` (D208)
+- `cliente.dNumIDRec`: `"0"` (D210)
+- `cliente.razonSocial`: `"Sin Nombre"` (D211)
+
+Restricción SIFEN: innominado aplica solo cuando el total de la operación es **menor** a `60.000.000` Gs. Si es igual o mayor, SIFEN exige identificar al receptor (ej. cédula).
+
+Ejemplo de payload de cliente innominado:
+
+```json
+{
+  "cliente": {
+    "contribuyente": false,
+    "razonSocial": "Sin Nombre",
+    "tipoOperacion": 2,
+    "pais": "PRY",
+    "paisDescripcion": "Paraguay",
+    "tipoContribuyente": 2,
+    "iTipIDRec": 5,
+    "dNumIDRec": "0"
+  }
+}
+```
+
 #### Respuesta
 
 ```json

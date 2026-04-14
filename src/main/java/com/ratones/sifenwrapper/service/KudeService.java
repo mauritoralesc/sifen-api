@@ -217,6 +217,10 @@ public class KudeService {
         ClienteDTO cliente = req.getData().getCliente();
         if (cliente == null) return;
 
+        boolean innominado = isInnominado(cliente);
+        String nombreReceptor = innominado ? "Sin Nombre" : nulo(cliente.getRazonSocial());
+        String docReceptor = innominado ? "Innominado" : nulo(resolveDocumentoCliente(cliente));
+
         Paragraph titulo = new Paragraph("DATOS DEL RECEPTOR", HEADER_FONT);
         titulo.setSpacingAfter(4);
         doc.add(titulo);
@@ -230,8 +234,8 @@ public class KudeService {
         leftCell.setBorderColor(BORDER_COLOR);
         leftCell.setPadding(8);
 
-        leftCell.addElement(new Paragraph("Nombre/Razón Social: " + nulo(cliente.getRazonSocial()), BOLD_FONT));
-        leftCell.addElement(new Paragraph("RUC/CI: " + nulo(cliente.getRuc()), NORMAL_FONT));
+        leftCell.addElement(new Paragraph("Nombre/Razón Social: " + nombreReceptor, BOLD_FONT));
+        leftCell.addElement(new Paragraph("RUC/CI: " + docReceptor, NORMAL_FONT));
         if (cliente.getTelefono() != null) {
             leftCell.addElement(new Paragraph("Teléfono: " + cliente.getTelefono(), NORMAL_FONT));
         }
@@ -254,6 +258,27 @@ public class KudeService {
         table.addCell(rightCell);
 
         doc.add(table);
+    }
+
+    private boolean isInnominado(ClienteDTO cliente) {
+        Integer tipoDoc = resolveTipoDocumentoReceptor(cliente);
+        return tipoDoc != null && tipoDoc == 5;
+    }
+
+    private Integer resolveTipoDocumentoReceptor(ClienteDTO cliente) {
+        if (cliente.getITipIDRec() != null) return cliente.getITipIDRec();
+        if (cliente.getTipoDocumentoIdentidad() != null) return cliente.getTipoDocumentoIdentidad();
+        if (cliente.getTipoDocumento() != null) return cliente.getTipoDocumento();
+        return cliente.getDocumentoTipo();
+    }
+
+    private String resolveDocumentoCliente(ClienteDTO cliente) {
+        if (cliente.getRuc() != null && !cliente.getRuc().isBlank()) return cliente.getRuc();
+        if (cliente.getDNumIDRec() != null && !cliente.getDNumIDRec().isBlank()) return cliente.getDNumIDRec();
+        if (cliente.getNumeroDocumentoIdentidad() != null && !cliente.getNumeroDocumentoIdentidad().isBlank()) return cliente.getNumeroDocumentoIdentidad();
+        if (cliente.getNumeroDocumento() != null && !cliente.getNumeroDocumento().isBlank()) return cliente.getNumeroDocumento();
+        if (cliente.getDocumentoNumero() != null && !cliente.getDocumentoNumero().isBlank()) return cliente.getDocumentoNumero();
+        return null;
     }
 
     private void addTablaItems(Document doc, KudeRequest req) throws DocumentException {
