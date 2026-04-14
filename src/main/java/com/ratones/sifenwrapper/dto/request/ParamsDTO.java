@@ -9,6 +9,7 @@ public class ParamsDTO {
     private String ruc;
     private String razonSocial;
     private String nombreFantasia;
+    private String logoBase64;
     private List<ActividadEconomicaDTO> actividadesEconomicas;
     private String timbradoNumero;
     private String timbradoFecha;

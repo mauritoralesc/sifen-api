@@ -1450,6 +1450,28 @@ con **OpenPDF** (sin depender de servicios externos). Incluye:
 - QR Code generado con ZXing
 - CDC formateado y estado SIFEN (APROBADO/RECHAZADO)
 
+### Logo de empresa en KUDE
+
+Podés incluir el logo en el encabezado enviando el campo opcional `params.logoBase64`.
+
+- Acepta base64 puro (`iVBORw0KGgo...`) o Data URI (`data:image/png;base64,...`).
+- Si el base64 es inválido, el KUDE se genera igual (solo sin logo).
+
+Ejemplo mínimo:
+
+```json
+{
+  "params": {
+    "ruc": "80167684-3",
+    "razonSocial": "MIAF E.A.S. UNIPERSONAL",
+    "logoBase64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+  },
+  "data": {
+    "tipoDocumento": 1
+  }
+}
+```
+
 ### Opción 1: KUDE incluido en la emisión (solo DEV)
 
 Enviar `"includeKude": true` en el request de emisión:

@@ -44,6 +44,8 @@ public class KudeService {
     private static final Color BORDER_COLOR = new Color(200, 200, 200);
 
     private static final float QR_SIZE_PT = 40 * 72f / 25.4f; // 40 mm en puntos PDF
+    private static final float LOGO_MAX_WIDTH_PT = 90f;
+    private static final float LOGO_MAX_HEIGHT_PT = 60f;
 
     // ─── Generación del KUDE ──────────────────────────────────────────────────
 
@@ -122,7 +124,21 @@ public class KudeService {
         PdfPTable headerTable = new PdfPTable(1);
         headerTable.setWidthPercentage(100);
 
-        // Nombre de la empresa
+        PdfPTable empresaConLogo = new PdfPTable(2);
+        empresaConLogo.setWidthPercentage(100);
+        empresaConLogo.setWidths(new float[]{1, 4});
+
+        PdfPCell logoCell = new PdfPCell();
+        logoCell.setBorder(Rectangle.NO_BORDER);
+        logoCell.setHorizontalAlignment(Element.ALIGN_LEFT);
+        logoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        logoCell.setPaddingBottom(4);
+        Image logo = buildLogoImage(params != null ? params.getLogoBase64() : null);
+        if (logo != null) {
+            logoCell.addElement(logo);
+        }
+        empresaConLogo.addCell(logoCell);
+
         PdfPCell empresaCell = new PdfPCell();
         empresaCell.setBorder(Rectangle.NO_BORDER);
         empresaCell.setPaddingBottom(4);
@@ -133,7 +149,8 @@ public class KudeService {
             empresa.add(new Chunk("\n" + params.getNombreFantasia(), NORMAL_FONT));
         }
         empresaCell.addElement(empresa);
-        headerTable.addCell(empresaCell);
+        empresaConLogo.addCell(empresaCell);
+        headerTable.addCell(empresaConLogo);
 
         // RUC
         PdfPCell rucCell = createInfoCell("RUC: " + params.getRuc(), BOLD_FONT);
@@ -174,6 +191,29 @@ public class KudeService {
         tipoPara.setSpacingBefore(8);
         tipoPara.setSpacingAfter(4);
         doc.add(tipoPara);
+    }
+
+    private Image buildLogoImage(String logoBase64) {
+        if (logoBase64 == null || logoBase64.isBlank()) {
+            return null;
+        }
+
+        try {
+            String raw = logoBase64.trim();
+            int commaIdx = raw.indexOf(',');
+            if (raw.startsWith("data:") && commaIdx > 0) {
+                raw = raw.substring(commaIdx + 1);
+            }
+
+            byte[] logoBytes = Base64.getDecoder().decode(raw);
+            Image logo = Image.getInstance(logoBytes);
+            logo.scaleToFit(LOGO_MAX_WIDTH_PT, LOGO_MAX_HEIGHT_PT);
+            logo.setAlignment(Image.ALIGN_LEFT);
+            return logo;
+        } catch (Exception e) {
+            log.warn("No se pudo decodificar el logo de empresa para KUDE: {}", e.getMessage());
+            return null;
+        }
     }
 
     private void addInfoDocumento(Document doc, KudeRequest req) throws DocumentException {
