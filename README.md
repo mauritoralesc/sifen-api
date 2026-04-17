@@ -23,9 +23,9 @@ El aislamiento multi-tenant se mantiene por `companyId` (JWT/API Key).
 |----------|-------------|-----------|---------|
 | `DB_HOST` | Host de PostgreSQL | No | `localhost` |
 | `DB_PORT` | Puerto de PostgreSQL | No | `5432` |
-| `DB_NAME` | Nombre de la base de datos | No | `sifen_wrapper` |
-| `DB_USER` | Usuario de PostgreSQL | No | `sifen` |
-| `DB_PASS` | Contraseña de PostgreSQL | No | `sifen` |
+| `DB_NAME` | Nombre de la base de datos | No | `sifen` |
+| `DB_USER` | Usuario de PostgreSQL | No | `postgres` |
+| `DB_PASS` | Contraseña de PostgreSQL | **Sí (prod)** | dev default |
 | `JWT_SECRET` | Clave secreta para firmar JWT (mín. 32 chars) | **Sí (prod)** | dev default |
 | `ENCRYPTION_KEY` | Clave AES-256 en base64 (32 bytes) | **Sí (prod)** | dev default |
 | `SIFEN_BATCH_ENABLED` | Habilitar/deshabilitar schedulers de envío y consulta | No | `true` |
@@ -49,9 +49,9 @@ server:
 
 spring:
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:sifen_wrapper}
-    username: ${DB_USER:sifen}
-    password: ${DB_PASS:sifen}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:sifen}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASS:}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -83,7 +83,7 @@ sifen:
 
 ```bash
 # Crear la base de datos
-createdb sifen_wrapper
+createdb sifen
 
 # Iniciar la aplicación (Flyway crea las tablas automáticamente)
 mvn spring-boot:run
@@ -1407,8 +1407,10 @@ sifen-wrapper/
 │   ├── exception/
 │   │   ├── SifenServiceException.java
 │   │   └── GlobalExceptionHandler.java
-│   └── patch/
-│       └── TgGroupTiEvtPatched.java     # experimental/legacy (no usado en flujo actual)
+│   ├── patch/
+│       ├── TgCamIVAPatched.java         # Parche: campo dBasExe en gCamIVA (NT13)
+│       ├── TgGroupTiEvtPatched.java     # Parche: estructura de eventos SIFEN v150
+│       └── TgTotSubPatched.java         # Parche: totales del documento (gTotSub)
 ├── src/main/resources/
 │   ├── application.yml
 │   └── db/migration/
@@ -1419,7 +1421,9 @@ sifen-wrapper/
 │       ├── V5__add_emisor_config_to_companies.sql
 │       ├── V6__disable_nt13_default.sql
 │       ├── V7__enable_nt13_default.sql
-│       └── V8__create_electronic_documents_table.sql
+│       ├── V8__create_electronic_documents_table.sql
+│       ├── V9__allow_duplicate_ruc_with_operational_profile.sql
+│       └── V10__remove_company_operational_unique_index.sql
 └── pom.xml
 ```
 
@@ -1656,3 +1660,4 @@ Respuesta:
 - Los subtotales (`gTotSub`) se calculan automáticamente por la librería a partir de los ítems.
 - El código de seguridad (`dCodSeg`) se rellena automáticamente a 9 dígitos para generar un CDC válido de 44 posiciones.
 - Flyway gestiona el schema de BD automáticamente al iniciar la aplicación.
+- El directorio `target/` con el JAR compilado (`sifen-wrapper-1.0.0.jar`) está incluido en el repositorio. Se recomienda agregarlo al `.gitignore` en producción para evitar commits de artefactos binarios.
