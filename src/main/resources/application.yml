@@ -43,6 +43,11 @@ sifen:
     min-wait-before-poll: ${SIFEN_BATCH_MIN_WAIT:600}
     max-poll-age-hours: ${SIFEN_BATCH_MAX_AGE:48}
 
+resend:
+  api-key: ${RESEND_API_KEY:}
+  from-email: ${RESEND_FROM_EMAIL:no-reply@sifen-wrapper.com}
+  from-name: ${RESEND_FROM_NAME:SIFEN Wrapper}
+
 logging:
   level:
     com.ratones: DEBUG

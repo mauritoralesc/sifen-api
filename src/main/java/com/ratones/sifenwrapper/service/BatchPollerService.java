@@ -35,6 +35,7 @@ public class BatchPollerService {
     private final ElectronicDocumentRepository documentRepository;
     private final SifenConfigFactory sifenConfigFactory;
     private final InvoiceService invoiceService;
+    private final InvoiceEmailService invoiceEmailService;
     private final BatchProperties batchProperties;
 
     @Scheduled(fixedDelayString = "${sifen.batch.poll-interval:600000}")
@@ -154,6 +155,14 @@ public class BatchPollerService {
 
             documentRepository.save(doc);
             log.info("[STATUS-UPDATE] CDC: {} — {} → {}", doc.getCdc(), estadoAnterior, nuevoEstado);
+
+            if (!estadoAnterior.equals(nuevoEstado) && isApprovedState(nuevoEstado)) {
+                InvoiceEmailService.EmailDispatchResult emailResult =
+                        invoiceEmailService.sendApprovedEmail(doc);
+                if (!emailResult.sent()) {
+                    log.warn("[EMAIL] No se envió correo para CDC {}: {}", doc.getCdc(), emailResult.reason());
+                }
+            }
         }
     }
 
@@ -195,6 +204,15 @@ public class BatchPollerService {
                             documentRepository.save(doc);
                             log.info("[STATUS-UPDATE] CDC: {} — {} → {} (consulta individual)",
                                     doc.getCdc(), estadoAnterior, nuevoEstado);
+
+                            if (!estadoAnterior.equals(nuevoEstado) && isApprovedState(nuevoEstado)) {
+                                InvoiceEmailService.EmailDispatchResult emailResult =
+                                        invoiceEmailService.sendApprovedEmail(doc);
+                                if (!emailResult.sent()) {
+                                    log.warn("[EMAIL] No se envió correo para CDC {}: {}",
+                                            doc.getCdc(), emailResult.reason());
+                                }
+                            }
                         }
                     }
                 } catch (Exception e) {
@@ -215,5 +233,10 @@ public class BatchPollerService {
             case "rechazado": return "RECHAZADO";
             default: return "DESCONOCIDO";
         }
+    }
+
+    private boolean isApprovedState(String estado) {
+        return "APROBADO".equalsIgnoreCase(estado)
+                || "APROBADO_CON_OBSERVACION".equalsIgnoreCase(estado);
     }
 }

@@ -52,6 +52,7 @@ public class InvoiceService {
     private final SifenConfigFactory sifenConfigFactory;
     private final CompanyService companyService;
     private final KudeService kudeService;
+    private final InvoiceEmailService invoiceEmailService;
     private final ElectronicDocumentRepository electronicDocumentRepository;
     private final ObjectMapper objectMapper;
 
@@ -234,6 +235,7 @@ public class InvoiceService {
                 RespuestaConsultaDE respuesta = Sifen.consultaDE(cdc);
 
                 if (respuesta != null && respuesta.getdCodRes() != null) {
+                    String estadoAnterior = doc.getEstado();
                     String nuevoEstado = resolverEstadoDocumento(respuesta.getdCodRes());
                     if (!"DESCONOCIDO".equals(nuevoEstado) && !nuevoEstado.startsWith("CODIGO_")) {
                         doc.setEstado(nuevoEstado);
@@ -242,6 +244,15 @@ public class InvoiceService {
                         doc.setProcessedAt(LocalDateTime.now());
                         electronicDocumentRepository.save(doc);
                         log.info("[STATUS-UPDATE] CDC: {} → {}", cdc, nuevoEstado);
+
+                        if (!estadoAnterior.equals(nuevoEstado) && isApprovedState(nuevoEstado)) {
+                            InvoiceEmailService.EmailDispatchResult emailResult =
+                                    invoiceEmailService.sendApprovedEmail(doc);
+                            if (!emailResult.sent()) {
+                                log.warn("[EMAIL] No se envió correo para CDC {}: {}",
+                                        cdc, emailResult.reason());
+                            }
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -521,6 +532,15 @@ public class InvoiceService {
         }
 
         EmisionDEResponse response = builder.build();
+
+        if (isApprovedState(response.getEstado())) {
+            InvoiceEmailService.EmailDispatchResult emailResult =
+                invoiceEmailService.sendApprovedEmailFromEmission(request, response);
+            if (!emailResult.sent()) {
+            log.info("[EMAIL] Emisión aprobada sin correo enviado (cdc={}): {}",
+                response.getCdc(), emailResult.reason());
+            }
+        }
 
         // Generar KUDE si fue solicitado
         if (includeKude) {
@@ -1104,7 +1124,25 @@ public class InvoiceService {
         }
 
         validateTenantRucMatch(resolved);
+        validateEmisorEstablecimiento(resolved);
         return resolved;
+    }
+
+    private void validateEmisorEstablecimiento(ParamsDTO params) {
+        if (params.getEstablecimientos() == null || params.getEstablecimientos().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "El emisor debe incluir al menos un establecimiento en params.establecimientos.");
+        }
+
+        var est = params.getEstablecimientos().get(0);
+        if (est.getDistritoDescripcion() == null || est.getDistritoDescripcion().isBlank()) {
+            throw new IllegalArgumentException(
+                    "El campo params.establecimientos[0].distritoDescripcion es obligatorio para SIFEN.");
+        }
+        if (est.getCiudadDescripcion() == null || est.getCiudadDescripcion().isBlank()) {
+            throw new IllegalArgumentException(
+                    "El campo params.establecimientos[0].ciudadDescripcion es obligatorio para SIFEN.");
+        }
     }
 
     private void validateTenantRucMatch(ParamsDTO params) {
@@ -1133,6 +1171,29 @@ public class InvoiceService {
 
     private String normalizeRuc(String value) {
         return value == null ? "" : value.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+    }
+
+    public InvoiceEmailService.EmailDispatchResult reenviarEmailFacturaAprobada(String cdc) {
+        Long companyId = TenantContext.get();
+        if (companyId == null) {
+            throw new IllegalStateException("No hay tenant configurado para la request actual");
+        }
+
+        ElectronicDocument doc = electronicDocumentRepository.findByCdc(cdc)
+                .orElseThrow(() -> new IllegalArgumentException("No se encontró documento con CDC: " + cdc));
+
+        if (!companyId.equals(doc.getCompanyId())) {
+            throw new IllegalArgumentException("El CDC no pertenece a la empresa autenticada");
+        }
+
+        return invoiceEmailService.sendApprovedEmail(doc);
+    }
+
+    private boolean isApprovedState(String estado) {
+        if (estado == null) return false;
+        return "APROBADO".equalsIgnoreCase(estado)
+                || "APROBADO_CON_OBSERVACION".equalsIgnoreCase(estado)
+                || estado.toUpperCase().startsWith("APROBADO");
     }
 
     /**

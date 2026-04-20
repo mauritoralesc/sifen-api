@@ -4,6 +4,7 @@ import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
 import com.ratones.sifenwrapper.dto.request.EventoRequest;
 import com.ratones.sifenwrapper.dto.request.KudeRequest;
 import com.ratones.sifenwrapper.dto.response.*;
+import com.ratones.sifenwrapper.service.InvoiceEmailService;
 import com.ratones.sifenwrapper.service.InvoiceService;
 import com.ratones.sifenwrapper.service.KudeService;
 import lombok.RequiredArgsConstructor;
@@ -110,6 +111,28 @@ public class InvoiceController {
         log.info("GET /invoices/{}/status?refresh={}", cdc, refresh);
         DocumentStatusResponse response = invoiceService.consultarEstadoLocal(cdc, refresh);
         return ResponseEntity.ok(SifenApiResponse.ok(response));
+    }
+
+    @PostMapping("/{cdc}/resend-email")
+    public ResponseEntity<SifenApiResponse<Map<String, String>>> reenviarEmailFactura(
+            @PathVariable String cdc) {
+
+        log.info("POST /invoices/{}/resend-email", cdc);
+        InvoiceEmailService.EmailDispatchResult result = invoiceService.reenviarEmailFacturaAprobada(cdc);
+
+        Map<String, String> data = Map.of(
+                "cdc", cdc,
+                "sent", String.valueOf(result.sent()),
+                "email", result.email() != null ? result.email() : "",
+                "reason", result.reason() != null ? result.reason() : "",
+                "resendId", result.resendId() != null ? result.resendId() : ""
+        );
+
+        String message = result.sent()
+                ? "Correo reenviado correctamente"
+                : "No se pudo reenviar el correo";
+
+        return ResponseEntity.ok(SifenApiResponse.ok(data, message));
     }
 
     /**
