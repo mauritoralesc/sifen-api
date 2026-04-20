@@ -34,6 +34,9 @@ El aislamiento multi-tenant se mantiene por `companyId` (JWT/API Key).
 | `SIFEN_BATCH_MAX_PER_LOTE` | Máximo de DEs por lote | No | `50` |
 | `SIFEN_BATCH_MIN_WAIT` | Segundos mínimos antes de consultar un lote | No | `600` |
 | `SIFEN_BATCH_MAX_AGE` | Horas máximas para consulta por lote (luego usa CDC individual) | No | `48` |
+| `RESEND_API_KEY` | API Key de Resend para envío de correos | **Sí (si se usa email)** | vacío |
+| `RESEND_FROM_EMAIL` | Email remitente (debe estar verificado en Resend) | No | `no-reply@sifen-wrapper.com` |
+| `RESEND_FROM_NAME` | Nombre visible del remitente | No | `SIFEN Wrapper` |
 
 Generar la clave de cifrado:
 
@@ -75,6 +78,11 @@ sifen:
     max-per-lote: ${SIFEN_BATCH_MAX_PER_LOTE:50}
     min-wait-before-poll: ${SIFEN_BATCH_MIN_WAIT:600}
     max-poll-age-hours: ${SIFEN_BATCH_MAX_AGE:48}
+
+resend:
+  api-key: ${RESEND_API_KEY:}
+  from-email: ${RESEND_FROM_EMAIL:no-reply@sifen-wrapper.com}
+  from-name: ${RESEND_FROM_NAME:SIFEN Wrapper}
 ```
 
 > La configuración de SIFEN (certificados, CSC, ambiente) ya **no** se define en YAML. Se gestiona por empresa desde los endpoints de administración.
@@ -190,6 +198,7 @@ curl -H "X-API-Key: sw_live_aBcDeFgHiJkLmNoPqRsT..." http://localhost:8000/invoi
 | `GET` | `/invoices/batch/{nroLote}` | Consulta estado de lote directamente a SIFEN |
 | `GET` | `/invoices/ruc/{ruc}` | Consulta datos de un RUC |
 | `POST` | `/invoices/events` | Envía evento (cancelación, inutilización, etc.) |
+| `POST` | `/invoices/{cdc}/resend-email` | Reenvía email de factura aprobada al email del cliente |
 
 ### Reglas de acceso
 
@@ -386,6 +395,52 @@ Los schedulers se ejecutan automáticamente y no requieren intervención del cli
 | **BatchPollerService** | Cada 10 min (configurable) | Consulta lotes `ENVIADO` con ≥10 min → actualiza estado (`APROBADO`/`RECHAZADO`) |
 
 Los schedulers se habilitan/deshabilitan con la variable `SIFEN_BATCH_ENABLED`.
+
+### Notificaciones por Email (Resend)
+
+La API puede enviar notificaciones por email cuando una factura queda en estado aprobado.
+
+Comportamiento implementado:
+
+- Envío automático cuando un DE cambia a `APROBADO` o `APROBADO_CON_OBSERVACION`.
+- El envío se ejecuta desde los flujos de actualización de estado (batch y consulta individual/refresh).
+- También puede enviarse en emisión síncrona si el estado de respuesta ya es aprobado.
+- El receptor se toma de `data.cliente.email` del request original persistido.
+- Si `RESEND_API_KEY` no está configurada, se omite el envío y se registra en logs.
+
+Contenido del correo:
+
+- Asunto con CDC del documento.
+- Estado/código/mensaje de SIFEN.
+- Enlace QR del comprobante.
+
+> Nota: actualmente el correo se envía en formato HTML/texto, sin adjunto PDF KUDE.
+
+#### Reenvío manual por CDC
+
+Podés reenviar el correo de una factura aprobada usando:
+
+```bash
+curl -X POST http://localhost:8000/invoices/{cdc}/resend-email \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Respuesta típica:
+
+```json
+{
+  "success": true,
+  "message": "Correo reenviado correctamente",
+  "data": {
+    "cdc": "01801676843001001000002522026032010000000251",
+    "sent": "true",
+    "email": "cliente@dominio.com",
+    "reason": "",
+    "resendId": "a8f7f5cb-..."
+  },
+  "error": null
+}
+```
 
 ### Consulta de estado local
 
