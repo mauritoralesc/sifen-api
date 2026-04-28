@@ -2,7 +2,9 @@ package com.ratones.sifenwrapper.config;
 
 import com.ratones.sifenwrapper.entity.Company;
 import com.ratones.sifenwrapper.entity.User;
+import com.ratones.sifenwrapper.entity.UserCompanyMembership;
 import com.ratones.sifenwrapper.repository.CompanyRepository;
+import com.ratones.sifenwrapper.repository.UserCompanyMembershipRepository;
 import com.ratones.sifenwrapper.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,7 @@ public class AdminSeeder implements CommandLineRunner {
 
     private final UserRepository userRepository;
     private final CompanyRepository companyRepository;
+    private final UserCompanyMembershipRepository membershipRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -35,12 +38,16 @@ public class AdminSeeder implements CommandLineRunner {
                 .ambiente("DEV")
                 .build());
 
-        userRepository.save(User.builder()
+        User admin = userRepository.save(User.builder()
                 .email("admin@sifen-wrapper.com")
                 .passwordHash(passwordEncoder.encode("admin123"))
                 .fullName("Administrador")
-                .role(User.Role.ADMIN)
+                .build());
+
+        membershipRepository.save(UserCompanyMembership.builder()
+                .user(admin)
                 .company(company)
+                .role(User.Role.ADMIN)
                 .build());
 
         log.info("Usuario admin creado: admin@sifen-wrapper.com / admin123");

@@ -1,6 +1,8 @@
 package com.ratones.sifenwrapper.repository;
 
 import com.ratones.sifenwrapper.entity.ElectronicDocument;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -45,4 +47,12 @@ public interface ElectronicDocumentRepository extends JpaRepository<ElectronicDo
 
     @Query("SELECT COUNT(e) FROM ElectronicDocument e WHERE e.companyId = :companyId AND e.estado = :estado")
     long countByCompanyIdAndEstado(@Param("companyId") Long companyId, @Param("estado") String estado);
+
+       Page<ElectronicDocument> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+       Page<ElectronicDocument> findAllByCompanyIdOrderByCreatedAtDesc(Long companyId, Pageable pageable);
+
+       Page<ElectronicDocument> findAllByEstadoOrderByCreatedAtDesc(String estado, Pageable pageable);
+
+       Page<ElectronicDocument> findAllByCompanyIdAndEstadoOrderByCreatedAtDesc(Long companyId, String estado, Pageable pageable);
 }

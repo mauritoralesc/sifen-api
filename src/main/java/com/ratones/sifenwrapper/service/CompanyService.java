@@ -3,7 +3,11 @@ package com.ratones.sifenwrapper.service;
 import com.ratones.sifenwrapper.dto.company.*;
 import com.ratones.sifenwrapper.dto.request.ParamsDTO;
 import com.ratones.sifenwrapper.entity.Company;
+import com.ratones.sifenwrapper.entity.User;
+import com.ratones.sifenwrapper.entity.UserCompanyMembership;
 import com.ratones.sifenwrapper.repository.CompanyRepository;
+import com.ratones.sifenwrapper.repository.UserCompanyMembershipRepository;
+import com.ratones.sifenwrapper.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,10 +25,12 @@ public class CompanyService {
     private final CompanyRepository companyRepository;
     private final EncryptionService encryptionService;
     private final SifenConfigFactory sifenConfigFactory;
+    private final UserRepository userRepository;
+    private final UserCompanyMembershipRepository membershipRepository;
 
     @Transactional
     @SuppressWarnings("null")
-    public CompanyResponse create(CreateCompanyRequest request) {
+    public CompanyResponse create(CreateCompanyRequest request, Long creatorUserId) {
         String ambiente = normalizeAmbiente(request.getAmbiente(), DEFAULT_AMBIENTE);
         String nombre = normalizeNombre(request.getNombre());
 
@@ -39,6 +45,17 @@ public class CompanyService {
                 .build();
 
         Company savedCompany = companyRepository.save(company);
+
+        if (creatorUserId != null) {
+            userRepository.findById(creatorUserId).ifPresent(user ->
+                membershipRepository.save(UserCompanyMembership.builder()
+                        .user(user)
+                        .company(savedCompany)
+                        .role(User.Role.ADMIN)
+                        .build())
+            );
+        }
+
         log.info("Empresa creada: {} (RUC: {})", savedCompany.getNombre(), savedCompany.getRuc());
         return toResponse(savedCompany);
     }
@@ -46,6 +63,12 @@ public class CompanyService {
     public List<CompanyResponse> findAll() {
         return companyRepository.findAllByActiveTrue().stream()
                 .map(this::toResponse)
+                .toList();
+    }
+
+    public List<CompanyResponse> findAllByUser(Long userId) {
+        return membershipRepository.findAllByUserIdAndActiveTrue(userId).stream()
+                .map(m -> toResponse(m.getCompany()))
                 .toList();
     }
 
@@ -64,6 +87,8 @@ public class CompanyService {
         company.setNombre(nombre);
         company.setAmbiente(ambiente);
         company.setHabilitarNt13(request.isHabilitarNt13());
+        if (request.getRuc() != null) company.setRuc(request.getRuc());
+        if (request.getDv() != null) company.setDv(request.getDv());
         company = companyRepository.save(company);
         sifenConfigFactory.evict(id);
         log.info("Empresa actualizada: id={}", id);

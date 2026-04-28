@@ -175,7 +175,9 @@ public class KudeService {
 
         // Actividad económica
         if (params.getActividadesEconomicas() != null && !params.getActividadesEconomicas().isEmpty()) {
-            String act = params.getActividadesEconomicas().get(0).getDescripcion();
+            String act = params.getActividadesEconomicas().stream()
+                    .map(ActividadEconomicaDTO::getDescripcion)
+                    .collect(java.util.stream.Collectors.joining(" / "));
             headerTable.addCell(createInfoCell("Act. Económica: " + act, SMALL_FONT));
         }
 

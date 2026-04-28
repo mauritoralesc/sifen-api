@@ -8,6 +8,10 @@ El sistema permite **RUC repetido** siempre que cambie el perfil operativo de em
 La API permite múltiples empresas con el mismo `ruc`, `dv`, `ambiente` y `nombre`.
 El aislamiento multi-tenant se mantiene por `companyId` (JWT/API Key).
 
+## Documentacion adicional
+
+- [Guia de integracion frontend con Next.js](docs/frontend-integration-nextjs.md)
+
 ## Requisitos
 
 - Java 17+
@@ -100,6 +104,7 @@ mvn spring-boot:run
 Al primer arranque se crea automáticamente:
 - **Empresa:** "Administración" (RUC: 00000000)
 - **Usuario admin:** `admin@sifen-wrapper.com` / `admin123`
+- **Membresía:** usuario admin con rol `ADMIN` en la empresa "Administración"
 
 > **Importante:** cambiar la contraseña del admin en producción.
 
@@ -107,46 +112,87 @@ Al primer arranque se crea automáticamente:
 
 ## Autenticación
 
-La API soporta dos mecanismos de autenticación:
+La API soporta dos mecanismos de autenticación: **JWT** (para usuarios del panel) y **API Key** (para integraciones server-to-server).
 
-### JWT (usuarios)
+### Registro
 
 ```bash
-# Login
-curl -X POST http://localhost:8000/auth/login \
+curl -X POST http://localhost:8000/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "admin@sifen-wrapper.com", "password": "admin123"}'
-
-# Respuesta
-{
-  "accessToken": "eyJhbGciOi...",
-  "refreshToken": "eyJhbGciOi...",
-  "expiresIn": 3600
-}
-
-# Usar el token en requests
-curl -H "Authorization: Bearer eyJhbGciOi..." http://localhost:8000/invoices/...
+  -d '{"email": "nuevo@empresa.com", "password": "mi_password", "fullName": "Juan Pérez"}'
 ```
 
-### API Key (acceso programático)
+Respuesta:
+
+```json
+{
+  "success": true,
+  "message": "Cuenta creada correctamente",
+  "data": { "accessToken": "eyJhbGciOi...", "expiresIn": 3600, "role": "ADMIN" }
+}
+```
+
+### Login
 
 ```bash
-# Crear API Key (requiere JWT de ADMIN)
-curl -X POST http://localhost:8000/api-keys \
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "nuevo@empresa.com", "password": "mi_password"}'
+```
+
+Respuesta idéntica al registro. El JWT recibido es válido para todos los endpoints de `/companies/**`.
+
+### Gestión de empresas con el JWT
+
+Con el JWT obtenido del registro o login, el usuario puede crear y gestionar sus empresas. Si no tiene ninguna, debe crear una:
+
+```bash
+# Listar mis empresas
+curl http://localhost:8000/companies \
+  -H "Authorization: Bearer eyJhbGciOi..."
+
+# Crear empresa (si no tiene ninguna o quiere agregar más)
+curl -X POST http://localhost:8000/companies \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"nombre": "Mi Empresa S.A.", "ruc": "80167684", "dv": "3", "ambiente": "DEV"}'
+```
+
+### Usuarios y API Keys por empresa
+
+Los usuarios y las API Keys se gestionan bajo la ruta de la empresa:
+
+```bash
+# Crear API Key para la empresa 1
+curl -X POST http://localhost:8000/companies/1/api-keys \
   -H "Authorization: Bearer eyJhbGciOi..." \
   -H "Content-Type: application/json" \
   -d '{"name": "Mi integración"}'
 
-# Respuesta (el key completo se muestra UNA SOLA VEZ)
-{
-  "id": 1,
-  "keyPrefix": "sw_live_",
-  "name": "Mi integración",
-  "rawKey": "sw_live_aBcDeFgHiJkLmNoPqRsT..."
-}
+# Crear usuario en la empresa 1
+curl -X POST http://localhost:8000/companies/1/users \
+  -H "Authorization: Bearer eyJhbGciOi..." \
+  -H "Content-Type: application/json" \
+  -d '{"email": "operador@empresa.com", "password": "pass123", "fullName": "Operador", "role": "USER"}'
+```
 
-# Usar el API Key en requests
-curl -H "X-API-Key: sw_live_aBcDeFgHiJkLmNoPqRsT..." http://localhost:8000/invoices/...
+### Facturación (con API Key)
+
+La API Key lleva el contexto de empresa automáticamente, no requiere headers adicionales:
+
+```bash
+curl -X POST http://localhost:8000/invoices/prepare \
+  -H "X-API-Key: sw_live_aBcDeFgHiJkLmNoPqRsT..." \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+### Refresh de token
+
+```bash
+curl -X POST http://localhost:8000/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "eyJhbGciOi..."}'
 ```
 
 ---
@@ -157,33 +203,49 @@ curl -H "X-API-Key: sw_live_aBcDeFgHiJkLmNoPqRsT..." http://localhost:8000/invoi
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `POST` | `/auth/login` | Login con email + password → JWT |
+| `POST` | `/auth/register` | Crear cuenta → JWT listo para usar |
+| `POST` | `/auth/login` | Login → JWT listo para usar |
 | `POST` | `/auth/refresh` | Renovar access token con refresh token |
 
-### Administración de Empresas (ADMIN)
+### Gestión de Empresas (ADMIN con JWT)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `POST` | `/companies` | Crear empresa |
-| `GET` | `/companies` | Listar empresas |
+| `POST` | `/companies` | Crear empresa (queda como ADMIN automáticamente) |
+| `GET` | `/companies` | Listar mis empresas |
 | `GET` | `/companies/{id}` | Detalle de empresa |
 | `PUT` | `/companies/{id}` | Actualizar empresa |
-| `DELETE` | `/companies/{id}` | Desactivar empresa |
+| `DELETE` | `/companies/{id}` | Desactivar empresa (lógica) |
 | `POST` | `/companies/{id}/certificate` | Subir certificado PFX (multipart) |
 | `DELETE` | `/companies/{id}/certificate` | Eliminar certificado |
 | `PUT` | `/companies/{id}/csc` | Actualizar CSC (id + valor) |
-| `PUT` | `/companies/{id}/emisor` | Configurar datos del emisor (params) |
+| `PUT` | `/companies/{id}/emisor` | Configurar datos del emisor |
 | `GET` | `/companies/{id}/emisor` | Obtener configuración del emisor |
 
-### API Keys (ADMIN)
+> Todos los endpoints de `/companies/{id}/**` verifican membresía activa del usuario autenticado en esa empresa.
+
+### Gestión de Usuarios por Empresa (ADMIN con JWT)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `POST` | `/api-keys` | Crear API Key para la empresa |
-| `GET` | `/api-keys` | Listar API Keys (solo prefix + metadata) |
-| `DELETE` | `/api-keys/{id}` | Revocar un API Key |
+| `POST` | `/companies/{id}/users` | Crear usuario en la empresa |
+| `GET` | `/companies/{id}/users` | Listar usuarios de la empresa |
+| `GET` | `/companies/{id}/users/{userId}` | Detalle de usuario |
+| `PATCH` | `/companies/{id}/users/{userId}` | Actualizar `email`, `fullName` o `password` |
+| `DELETE` | `/companies/{id}/users/{userId}` | Desactivar membresía del usuario |
+| `POST` | `/companies/{id}/members` | Agregar usuario existente a la empresa |
+| `GET` | `/companies/{id}/members` | Listar miembros de la empresa |
+| `DELETE` | `/companies/{id}/members/{userId}` | Desactivar membresía de un usuario |
 
-### Facturación Electrónica (autenticado — JWT o API Key)
+### API Keys por Empresa (ADMIN con JWT)
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/companies/{id}/api-keys` | Crear API Key para la empresa |
+| `GET` | `/companies/{id}/api-keys` | Listar API Keys de la empresa |
+| `DELETE` | `/companies/{id}/api-keys/{keyId}` | Revocar un API Key |
+
+### Facturación Electrónica (API Key)
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -199,16 +261,6 @@ curl -H "X-API-Key: sw_live_aBcDeFgHiJkLmNoPqRsT..." http://localhost:8000/invoi
 | `GET` | `/invoices/ruc/{ruc}` | Consulta datos de un RUC |
 | `POST` | `/invoices/events` | Envía evento (cancelación, inutilización, etc.) |
 | `POST` | `/invoices/{cdc}/resend-email` | Reenvía email de factura aprobada al email del cliente |
-
-### Reglas de acceso
-
-| Ruta | Acceso |
-|------|--------|
-| `/auth/**` | Público |
-| `/companies/**` | ADMIN (JWT) |
-| `/api-keys/**` | ADMIN (JWT) |
-| `/users/**` | ADMIN (JWT) |
-| `/invoices/**` | Autenticado (JWT o API Key) |
 
 ### Estado del servicio de emisión síncrona
 
@@ -710,7 +762,7 @@ curl -X POST http://localhost:8000/companies \
 
 ### Actualizar empresa (perfil operativo)
 
-El endpoint `PUT /companies/{id}` permite actualizar `nombre`, `ambiente` y `habilitarNt13`.
+El endpoint `PUT /companies/{id}` permite actualizar `nombre`, `ruc`, `dv`, `ambiente` y `habilitarNt13`.
 
 Ejemplo:
 
@@ -1416,32 +1468,36 @@ sifen-wrapper/
 │   │   ├── SifenConfiguration.java       # (legacy, delegado a SifenConfigFactory)
 │   │   └── SifenProperties.java          # (legacy, sin uso activo)
 │   ├── controller/
-│   │   ├── AuthController.java           # POST /auth/login, /auth/refresh
-│   │   ├── CompanyController.java        # CRUD /companies, certificado, CSC
+│   │   ├── AuthController.java           # POST /auth/login, /auth/refresh, /auth/switch-company
+│   │   ├── CompanyController.java        # CRUD /companies, certificado, CSC, /members
+│   │   ├── UserController.java           # CRUD /users (scoped a empresa del ADMIN)
 │   │   ├── ApiKeyController.java         # CRUD /api-keys
 │   │   └── InvoiceController.java        # Endpoints SIFEN + prepare + status
 │   ├── security/
 │   │   ├── TenantContext.java            # ThreadLocal<Long> companyId
 │   │   ├── TenantFilter.java             # Setea TenantContext desde auth
 │   │   ├── jwt/
-│   │   │   ├── JwtService.java           # Generación/validación JWT (HMAC-SHA)
+│   │   │   ├── JwtService.java           # Generación/validación JWT (access, refresh, selection)
 │   │   │   └── JwtAuthenticationFilter.java
 │   │   └── apikey/
 │   │       └── ApiKeyAuthenticationFilter.java  # Auth por X-API-Key header
 │   ├── entity/
 │   │   ├── Company.java                  # Empresa con cert, CSC, ambiente
-│   │   ├── User.java                     # Usuario con role ADMIN/USER
+│   │   ├── User.java                     # Usuario (sin FK directa a empresa ni rol)
+│   │   ├── UserCompanyMembership.java    # Relación usuario-empresa con rol por par
 │   │   ├── ApiKey.java                   # API Key (hash SHA-256)
 │   │   ├── AuditLog.java                 # Log de auditoría
 │   │   └── ElectronicDocument.java       # DE persistido localmente (prepare+batch)
 │   ├── repository/
 │   │   ├── CompanyRepository.java
 │   │   ├── UserRepository.java
+│   │   ├── UserCompanyMembershipRepository.java  # Queries por userId, companyId y par
 │   │   ├── ApiKeyRepository.java
 │   │   ├── AuditLogRepository.java
 │   │   └── ElectronicDocumentRepository.java  # Queries para batch/polling
 │   ├── service/
-│   │   ├── AuthService.java              # Login, refresh token
+│   │   ├── AuthService.java              # Login multi-empresa, switchCompany, refresh
+│   │   ├── UserService.java              # CRUD usuarios + gestión de membresías
 │   │   ├── CompanyService.java           # CRUD empresas + cifrado
 │   │   ├── CertificateService.java       # Validación de PFX
 │   │   ├── ApiKeyService.java            # Creación/búsqueda de API Keys
@@ -1454,7 +1510,10 @@ sifen-wrapper/
 │   ├── mapper/
 │   │   └── SifenMapper.java              # DTO → tipos de rshk-jsifenlib
 │   ├── dto/
-│   │   ├── auth/                         # LoginRequest, LoginResponse, RefreshRequest
+│   │   ├── auth/                         # LoginRequest, LoginResponse, RefreshRequest,
+│   │   │                                 # SwitchCompanyRequest, CompanyMemberInfo
+│   │   ├── user/                         # CreateUserRequest, UpdateUserRequest, UserResponse,
+│   │   │                                 # AddMemberRequest, MembershipResponse
 │   │   ├── company/                      # CreateCompanyRequest, CompanyResponse, etc.
 │   │   ├── apikey/                       # CreateApiKeyRequest, ApiKeyResponse
 │   │   ├── request/                      # DTOs de facturación (existentes)
@@ -1478,7 +1537,10 @@ sifen-wrapper/
 │       ├── V7__enable_nt13_default.sql
 │       ├── V8__create_electronic_documents_table.sql
 │       ├── V9__allow_duplicate_ruc_with_operational_profile.sql
-│       └── V10__remove_company_operational_unique_index.sql
+│       ├── V10__remove_company_operational_unique_index.sql
+│       ├── V11__create_user_company_memberships_table.sql
+│       ├── V12__migrate_users_to_memberships.sql
+│       └── V13__drop_users_company_role_columns.sql
 └── pom.xml
 ```
 
@@ -1684,12 +1746,14 @@ Respuesta:
 
 ## Seguridad
 
-- **JWT:** Access tokens (1h) + Refresh tokens (7d), firmados con HMAC-SHA. Claims: `sub` (userId), `companyId`, `role`.
+- **JWT:** Access tokens (1h) + Refresh tokens (7d), firmados con HMAC-SHA. Claims: `sub` (userId), `companyId`, `role`. El refresh token incluye `companyId` para verificar la membresía activa al renovar.
+- **Selection token:** JWT de 5 min (type="selection") usado exclusivamente en el flujo `POST /auth/switch-company`. No autoriza ningún otro endpoint.
 - **API Keys:** Prefijo `sw_live_` + random base64url. Se almacena solo el hash SHA-256. El key raw se muestra una sola vez al crear.
 - **Passwords:** BCrypt con strength 12.
 - **Datos sensibles:** Contraseñas de certificados y valores CSC cifrados con AES-256-GCM en BD.
 - **Certificados PFX:** Almacenados como `bytea` en PostgreSQL, cargados en memoria solo al firmar.
 - **Multi-tenant:** `TenantContext` (ThreadLocal) aislado por request, limpiado en `finally`.
+- **Members endpoints:** El ADMIN solo puede gestionar los miembros de su propia empresa. Se verifica que `TenantContext.get() == {id}` antes de cada operación de membresía.
 - **Caché:** SifenConfig por empresa con Caffeine (TTL 5 min, max 100 entradas). Se invalida al actualizar empresa/certificado/CSC.
 
 ### Variables sensibles
@@ -1701,6 +1765,81 @@ Respuesta:
 | `DB_PASS` | Contraseña de PostgreSQL |
 
 > **Nunca** commitear estas variables. Usar variables de entorno o un gestor de secretos.
+
+---
+
+## Gestión de Usuarios y Membresías
+
+El modelo de usuarios es **many-to-many**: un usuario puede pertenecer a varias empresas y una empresa puede tener varios usuarios. El rol (`ADMIN` / `USER`) se define **por membresía**, no globalmente.
+
+### Crear un usuario en la empresa actual
+
+```bash
+curl -X POST http://localhost:8000/users \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "operador@empresa.com",
+    "password": "clave123",
+    "fullName": "Operador Principal",
+    "role": "USER"
+  }'
+```
+
+### Agregar un usuario existente a otra empresa
+
+El usuario debe ya existir en el sistema. El ADMIN solo puede operar sobre su propia empresa.
+
+```bash
+curl -X POST http://localhost:8000/companies/2/members \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "operador@empresa.com",
+    "role": "ADMIN"
+  }'
+```
+
+### Listar miembros de una empresa
+
+```bash
+curl http://localhost:8000/companies/2/members \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Respuesta:
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "userId": 3,
+      "email": "operador@empresa.com",
+      "fullName": "Operador Principal",
+      "role": "ADMIN",
+      "active": true,
+      "memberSince": "2026-04-27T10:00:00"
+    }
+  ]
+}
+```
+
+### Desactivar membresía
+
+Desactiva solo la membresía del usuario en esa empresa. El usuario global y sus membresías en otras empresas no se ven afectados.
+
+```bash
+curl -X DELETE http://localhost:8000/companies/2/members/3 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Alternativamente, desde el endpoint de usuarios (opera sobre la empresa del ADMIN autenticado):
+
+```bash
+curl -X DELETE http://localhost:8000/users/3 \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ## Notas
 

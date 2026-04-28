@@ -18,6 +18,7 @@ public class JwtService {
     private final SecretKey signingKey;
     private final long accessTokenExpiration;
     private final long refreshTokenExpiration;
+    private static final long SELECTION_TOKEN_EXPIRATION = 300_000L; // 5 minutes
 
     public JwtService(SecurityProperties properties) {
         String secret = properties.getJwt().getSecret();
@@ -37,8 +38,22 @@ public class JwtService {
         ), String.valueOf(userId), accessTokenExpiration);
     }
 
-    public String generateRefreshToken(Long userId) {
-        return buildToken(Map.of("type", "refresh"), String.valueOf(userId), refreshTokenExpiration);
+    public String generateRefreshToken(Long userId, Long companyId) {
+        return buildToken(Map.of(
+                "type", "refresh",
+                "companyId", companyId
+        ), String.valueOf(userId), refreshTokenExpiration);
+    }
+
+    public String generateSelectionToken(Long userId) {
+        return buildToken(Map.of("type", "selection"), String.valueOf(userId), SELECTION_TOKEN_EXPIRATION);
+    }
+
+    public String generateNoCompanyToken(Long userId, String role) {
+        return buildToken(Map.of(
+                "role", role,
+                "type", "access"
+        ), String.valueOf(userId), accessTokenExpiration);
     }
 
     public Claims parseToken(String token) {

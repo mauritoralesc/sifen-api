@@ -31,7 +31,8 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/auth/**").permitAll()
                 .requestMatchers("/actuator/health").permitAll()
-                .requestMatchers("/companies/**", "/api-keys/**", "/users/**").hasRole("ADMIN")
+                .requestMatchers("/companies/**").hasRole("ADMIN")
+                .requestMatchers("/logs/**").hasRole("ADMIN")
                 .requestMatchers("/invoices/**").authenticated()
                 .anyRequest().denyAll()
             )

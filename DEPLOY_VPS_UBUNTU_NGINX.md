@@ -159,7 +159,7 @@ mvn clean package -DskipTests
 Subir JAR al VPS:
 
 ```bash
-scp /Users/mauriciotorales/sifen-wrapper/target/sifen-wrapper-1.0.0.jar root@5.78.122.42:/tmp/sifen-wrapper.jar
+scp /Users/mauricio/sifen-api/target/sifen-wrapper-1.0.0.jar root@5.78.122.42:/tmp/sifen-wrapper.jar
 ssh root@5.78.122.42
 sudo mv /tmp/sifen-wrapper.jar /opt/sifen-wrapper/app.jar
 sudo chown sifen:sifen /opt/sifen-wrapper/app.jar

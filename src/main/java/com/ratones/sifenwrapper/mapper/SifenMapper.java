@@ -2,6 +2,7 @@ package com.ratones.sifenwrapper.mapper;
 
 import com.roshka.sifen.core.beans.DocumentoElectronico;
 import com.roshka.sifen.core.fields.request.de.*;
+import com.ratones.sifenwrapper.patch.TgTimbPatched;
 import com.roshka.sifen.core.types.*;
 import com.roshka.sifen.internal.util.SifenUtil;
 import com.ratones.sifenwrapper.dto.request.*;
@@ -78,7 +79,7 @@ public class SifenMapper {
     // ─── Timbrado ─────────────────────────────────────────────────────────────
 
     private TgTimb buildTimbrado(DataDTO data, ParamsDTO params) {
-        TgTimb timb = new TgTimb();
+        TgTimb timb = new TgTimbPatched();
         timb.setiTiDE(TTiDE.getByVal((short) data.getTipoDocumento()));
         timb.setdNumTim(Integer.parseInt(params.getTimbradoNumero()));
         timb.setdEst(data.getEstablecimiento());
@@ -371,7 +372,10 @@ public class SifenMapper {
             TgPagCred credito = new TgPagCred();
             credito.setiCondCred(TiCondCred.getByVal((short) condicion.getCredito().getTipo()));
             credito.setdPlazoCre(String.valueOf(condicion.getCredito().getPlazo()));
-            credito.setdCuotas((short) condicion.getCredito().getCuotas());
+            // dCuotas sólo aplica cuando iCondCred = 2 (CUOTA); para tipo 1 (PLAZO) no se debe enviar
+            if (condicion.getCredito().getTipo() == 2) {
+                credito.setdCuotas((short) condicion.getCredito().getCuotas());
+            }
             camCond.setgPagCred(credito);
         }
 
