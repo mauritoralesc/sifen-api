@@ -22,6 +22,9 @@ public class DataDTO {
     private CondicionDTO condicion;
     private List<ItemDTO> items;
     private int indicadorPresencia;
+    // Campos opcionales para el KUDE
+    private String cajero;
+    private String socio;
     // Campos opcionales para otros tipos de documentos
     private AutoFacturaDTO autoFactura;
     private RemisionDTO remision;

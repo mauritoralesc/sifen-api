@@ -63,27 +63,17 @@ public class KudeService {
 
             document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
-            // Información del documento
-            addInfoDocumento(document, request);
+            // Información de emisión (cliente + condición + checkboxes)
+            addInfoEmision(document, request);
 
             document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
-            // Información del cliente
-            addInfoCliente(document, request);
-
-            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
-
-            // Tabla de items
+            // Tabla de items con totales integrados
             addTablaItems(document, request);
 
             document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
-            // Totales
-            addTotales(document, request);
-
-            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
-
-            // Condición de venta
+            // Forma de pago
             addCondicion(document, request);
 
             document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
@@ -117,82 +107,92 @@ public class KudeService {
 
     private void addEncabezado(Document doc, KudeRequest req) throws DocumentException {
         ParamsDTO params = req.getParams();
+        DataDTO data = req.getData();
 
-        // Tipo de documento
-        String tipoDoc = resolverTipoDocumento(req.getData().getTipoDocumento());
+        String tipoDoc = resolverTipoDocumento(data.getTipoDocumento());
+        String numero = String.format("%s-%s-%s", data.getEstablecimiento(), data.getPunto(), data.getNumero());
 
-        PdfPTable headerTable = new PdfPTable(1);
-        headerTable.setWidthPercentage(100);
+        // Tabla principal: 2 columnas — info empresa (izq) | caja doc (der)
+        PdfPTable mainTable = new PdfPTable(2);
+        mainTable.setWidthPercentage(100);
+        mainTable.setWidths(new float[]{3, 2});
 
-        PdfPTable empresaConLogo = new PdfPTable(2);
-        empresaConLogo.setWidthPercentage(100);
-        empresaConLogo.setWidths(new float[]{1, 4});
+        // ── Columna izquierda: logo + info empresa ──
+        PdfPCell leftCell = new PdfPCell();
+        leftCell.setBorder(Rectangle.NO_BORDER);
+        leftCell.setPadding(4);
+        leftCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
 
-        PdfPCell logoCell = new PdfPCell();
-        logoCell.setBorder(Rectangle.NO_BORDER);
-        logoCell.setHorizontalAlignment(Element.ALIGN_LEFT);
-        logoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
-        logoCell.setPaddingBottom(4);
+        // Logo + razón social en sub-tabla
+        PdfPTable logoTable = new PdfPTable(2);
+        logoTable.setWidthPercentage(100);
+        logoTable.setWidths(new float[]{1, 4});
         Image logo = buildLogoImage(params != null ? params.getLogoBase64() : null);
-        if (logo != null) {
-            logoCell.addElement(logo);
-        }
-        empresaConLogo.addCell(logoCell);
+        PdfPCell lcell = new PdfPCell();
+        lcell.setBorder(Rectangle.NO_BORDER);
+        lcell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        if (logo != null) lcell.addElement(logo);
+        logoTable.addCell(lcell);
 
-        PdfPCell empresaCell = new PdfPCell();
-        empresaCell.setBorder(Rectangle.NO_BORDER);
-        empresaCell.setPaddingBottom(4);
-
-        Paragraph empresa = new Paragraph();
-        empresa.add(new Chunk(params.getRazonSocial(), TITLE_FONT));
+        PdfPCell rcell = new PdfPCell();
+        rcell.setBorder(Rectangle.NO_BORDER);
+        rcell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        Paragraph razon = new Paragraph(params.getRazonSocial(), TITLE_FONT);
+        rcell.addElement(razon);
         if (params.getNombreFantasia() != null && !params.getNombreFantasia().isBlank()) {
-            empresa.add(new Chunk("\n" + params.getNombreFantasia(), NORMAL_FONT));
+            rcell.addElement(new Paragraph(params.getNombreFantasia(), NORMAL_FONT));
         }
-        empresaCell.addElement(empresa);
-        empresaConLogo.addCell(empresaCell);
-        headerTable.addCell(empresaConLogo);
+        logoTable.addCell(rcell);
+        leftCell.addElement(logoTable);
 
-        // RUC
-        PdfPCell rucCell = createInfoCell("RUC: " + params.getRuc(), BOLD_FONT);
-        headerTable.addCell(rucCell);
+        leftCell.addElement(new Paragraph("RUC: " + params.getRuc(), BOLD_FONT));
 
-        // Dirección del establecimiento
         if (params.getEstablecimientos() != null && !params.getEstablecimientos().isEmpty()) {
             EstablecimientoDTO est = params.getEstablecimientos().get(0);
             StringBuilder dir = new StringBuilder();
             if (est.getDireccion() != null) dir.append(est.getDireccion());
             if (est.getCiudadDescripcion() != null) dir.append(" - ").append(est.getCiudadDescripcion());
             if (est.getDepartamentoDescripcion() != null) dir.append(", ").append(est.getDepartamentoDescripcion());
-            headerTable.addCell(createInfoCell(dir.toString(), NORMAL_FONT));
-
-            if (est.getTelefono() != null) {
-                headerTable.addCell(createInfoCell("Tel: " + est.getTelefono(), NORMAL_FONT));
-            }
-            if (est.getEmail() != null) {
-                headerTable.addCell(createInfoCell("Email: " + est.getEmail(), NORMAL_FONT));
-            }
+            leftCell.addElement(new Paragraph(dir.toString(), SMALL_FONT));
+            if (est.getTelefono() != null) leftCell.addElement(new Paragraph("Tel: " + est.getTelefono(), SMALL_FONT));
+            if (est.getEmail() != null) leftCell.addElement(new Paragraph("Email: " + est.getEmail(), SMALL_FONT));
         }
-
-        // Actividad económica
         if (params.getActividadesEconomicas() != null && !params.getActividadesEconomicas().isEmpty()) {
             String act = params.getActividadesEconomicas().stream()
                     .map(ActividadEconomicaDTO::getDescripcion)
                     .collect(java.util.stream.Collectors.joining(" / "));
-            headerTable.addCell(createInfoCell("Act. Económica: " + act, SMALL_FONT));
+            leftCell.addElement(new Paragraph("Act. Económica: " + act, SMALL_FONT));
         }
 
-        doc.add(headerTable);
+        mainTable.addCell(leftCell);
 
-        // Línea separadora
-        doc.add(new Paragraph(" ", new Font(Font.HELVETICA, 2)));
-        addLineSeparator(doc, HEADER_BG, 1.5f);
+        // ── Columna derecha: caja de documento con borde ──
+        PdfPCell rightCell = new PdfPCell();
+        rightCell.setBorder(Rectangle.BOX);
+        rightCell.setBorderColor(BORDER_COLOR);
+        rightCell.setBorderWidth(1.5f);
+        rightCell.setPadding(6);
+        rightCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
 
-        // Tipo de documento grande
-        Paragraph tipoPara = new Paragraph(tipoDoc, TITLE_FONT);
-        tipoPara.setAlignment(Element.ALIGN_CENTER);
-        tipoPara.setSpacingBefore(8);
-        tipoPara.setSpacingAfter(4);
-        doc.add(tipoPara);
+        Paragraph tipoDocPara = new Paragraph(tipoDoc, new Font(Font.HELVETICA, 11, Font.BOLD, Color.BLACK));
+        tipoDocPara.setAlignment(Element.ALIGN_CENTER);
+        rightCell.addElement(tipoDocPara);
+
+        addDocBoxLine(rightCell, "RUC: ", params.getRuc());
+        addDocBoxLine(rightCell, "Timbrado N°: ", params.getTimbradoNumero());
+        addDocBoxLine(rightCell, "Fecha Inicio Vigencia: ", nulo(params.getTimbradoFecha()));
+        addDocBoxLine(rightCell, "N° Documento: ", numero);
+
+        mainTable.addCell(rightCell);
+        doc.add(mainTable);
+    }
+
+    private void addDocBoxLine(PdfPCell cell, String label, String value) {
+        Paragraph p = new Paragraph();
+        p.setSpacingBefore(2);
+        p.add(new Chunk(label, SMALL_FONT));
+        p.add(new Chunk(value, new Font(Font.HELVETICA, 8, Font.BOLD, Color.BLACK)));
+        cell.addElement(p);
     }
 
     private Image buildLogoImage(String logoBase64) {
@@ -218,68 +218,48 @@ public class KudeService {
         }
     }
 
-    private void addInfoDocumento(Document doc, KudeRequest req) throws DocumentException {
+    private void addInfoEmision(Document doc, KudeRequest req) throws DocumentException {
         DataDTO data = req.getData();
         ParamsDTO params = req.getParams();
+        ClienteDTO cliente = data.getCliente();
+        CondicionDTO condicion = data.getCondicion();
 
-        PdfPTable table = new PdfPTable(2);
-        table.setWidthPercentage(100);
-        table.setWidths(new float[]{1, 1});
-
-        // Columna izquierda
-        PdfPCell leftCell = new PdfPCell();
-        leftCell.setBorder(Rectangle.BOX);
-        leftCell.setBorderColor(BORDER_COLOR);
-        leftCell.setPadding(5);
-
-        String numero = String.format("%s-%s-%s",
-                data.getEstablecimiento(), data.getPunto(), data.getNumero());
-        leftCell.addElement(new Paragraph("Nro. Documento: " + numero, BOLD_FONT));
-        leftCell.addElement(new Paragraph("Timbrado: " + params.getTimbradoNumero(), NORMAL_FONT));
-        leftCell.addElement(new Paragraph("Inicio Vigencia: " + nulo(params.getTimbradoFecha()), NORMAL_FONT));
-
-        table.addCell(leftCell);
-
-        // Columna derecha
-        PdfPCell rightCell = new PdfPCell();
-        rightCell.setBorder(Rectangle.BOX);
-        rightCell.setBorderColor(BORDER_COLOR);
-        rightCell.setPadding(5);
-
-        rightCell.addElement(new Paragraph("Fecha Emisión: " + formatearFecha(data.getFecha()), BOLD_FONT));
-        rightCell.addElement(new Paragraph("Tipo Transacción: " + resolverTipoTransaccion(data.getTipoTransaccion()), NORMAL_FONT));
-        rightCell.addElement(new Paragraph("Moneda: " + nulo(data.getMoneda(), "PYG"), NORMAL_FONT));
-
-        table.addCell(rightCell);
-
-        doc.add(table);
-    }
-
-    private void addInfoCliente(Document doc, KudeRequest req) throws DocumentException {
-        ClienteDTO cliente = req.getData().getCliente();
-        if (cliente == null) return;
-
-        boolean innominado = isInnominado(cliente);
-        String nombreReceptor = innominado ? "Sin Nombre" : nulo(cliente.getRazonSocial());
+        boolean innominado = cliente == null || isInnominado(cliente);
+        String nombreReceptor = innominado ? "Sin Nombre" : nulo(cliente != null ? cliente.getRazonSocial() : null);
         String docReceptor = innominado ? "Innominado" : nulo(resolveDocumentoCliente(cliente));
 
-        Paragraph titulo = new Paragraph("DATOS DEL RECEPTOR", HEADER_FONT);
-        titulo.setSpacingAfter(4);
-        doc.add(titulo);
+        // Condición de venta: checkboxes
+        boolean esContado = condicion == null || condicion.getTipo() == 1;
+        String chkContado = esContado ? "[X] Contado" : "[ ] Contado";
+        String chkCredito = !esContado ? "[X] Crédito" : "[ ] Crédito";
 
+        // Tabla principal de info emisión: 2 columnas
         PdfPTable table = new PdfPTable(2);
         table.setWidthPercentage(100);
         table.setWidths(new float[]{1, 1});
+        table.setSpacingBefore(4);
 
         PdfPCell leftCell = new PdfPCell();
         leftCell.setBorder(Rectangle.BOX);
         leftCell.setBorderColor(BORDER_COLOR);
         leftCell.setPadding(5);
 
-        leftCell.addElement(new Paragraph("Nombre/Razón Social: " + nombreReceptor, BOLD_FONT));
-        leftCell.addElement(new Paragraph("RUC/CI: " + docReceptor, NORMAL_FONT));
-        if (cliente.getTelefono() != null) {
-            leftCell.addElement(new Paragraph("Teléfono: " + cliente.getTelefono(), NORMAL_FONT));
+        // Condición checkboxes
+        Paragraph condPara = new Paragraph();
+        condPara.add(new Chunk(chkContado + "   " + chkCredito, BOLD_FONT));
+        leftCell.addElement(condPara);
+
+        leftCell.addElement(new Paragraph("Fecha Emisión: " + formatearFecha(data.getFecha()), NORMAL_FONT));
+        leftCell.addElement(new Paragraph("Tipo Transacción: " + resolverTipoTransaccion(data.getTipoTransaccion()), SMALL_FONT));
+        leftCell.addElement(new Paragraph("Moneda: " + nulo(data.getMoneda(), "PYG"), SMALL_FONT));
+
+        if (data.getCajero() != null && !data.getCajero().isBlank()) {
+            leftCell.addElement(new Paragraph("Cajero: " + data.getCajero(), SMALL_FONT));
+        }
+
+        if (condicion != null && condicion.getCredito() != null) {
+            CreditoDTO cred = condicion.getCredito();
+            leftCell.addElement(new Paragraph("Plazo: " + cred.getPlazo() + " días  Cuotas: " + cred.getCuotas(), SMALL_FONT));
         }
 
         table.addCell(leftCell);
@@ -289,16 +269,21 @@ public class KudeService {
         rightCell.setBorderColor(BORDER_COLOR);
         rightCell.setPadding(5);
 
-        StringBuilder dir = new StringBuilder();
-        if (cliente.getDireccion() != null) dir.append(cliente.getDireccion());
-        if (cliente.getCiudadDescripcion() != null) dir.append(" - ").append(cliente.getCiudadDescripcion());
-        rightCell.addElement(new Paragraph("Dirección: " + dir, NORMAL_FONT));
-        if (cliente.getEmail() != null) {
-            rightCell.addElement(new Paragraph("Email: " + cliente.getEmail(), NORMAL_FONT));
+        rightCell.addElement(new Paragraph("Nombre/Razón Social: " + nombreReceptor, BOLD_FONT));
+        rightCell.addElement(new Paragraph("RUC/CI: " + docReceptor, NORMAL_FONT));
+        if (cliente != null) {
+            if (cliente.getTelefono() != null) rightCell.addElement(new Paragraph("Tel: " + cliente.getTelefono(), SMALL_FONT));
+            StringBuilder dir = new StringBuilder();
+            if (cliente.getDireccion() != null) dir.append(cliente.getDireccion());
+            if (cliente.getCiudadDescripcion() != null) dir.append(" - ").append(cliente.getCiudadDescripcion());
+            if (dir.length() > 0) rightCell.addElement(new Paragraph("Dirección: " + dir, SMALL_FONT));
+            if (cliente.getEmail() != null) rightCell.addElement(new Paragraph("Email: " + cliente.getEmail(), SMALL_FONT));
+        }
+        if (data.getSocio() != null && !data.getSocio().isBlank()) {
+            rightCell.addElement(new Paragraph("Socio: " + data.getSocio(), SMALL_FONT));
         }
 
         table.addCell(rightCell);
-
         doc.add(table);
     }
 
@@ -327,27 +312,27 @@ public class KudeService {
         List<ItemDTO> items = req.getData().getItems();
         if (items == null || items.isEmpty()) return;
 
-        Paragraph titulo = new Paragraph("DETALLE DE LA OPERACIÓN", HEADER_FONT);
-        titulo.setSpacingAfter(4);
-        doc.add(titulo);
-
-        // Tabla: Código | Descripción | Cant. | P. Unit. | Exenta | IVA 5% | IVA 10%
+        // Tabla: Cod | Descripción | P. Unit. | Descuento | Exentas | 5% | 10%
         PdfPTable table = new PdfPTable(7);
         table.setWidthPercentage(100);
-        table.setWidths(new float[]{10, 30, 8, 14, 13, 13, 13});
+        table.setWidths(new float[]{10, 32, 14, 12, 12, 10, 10});
+        table.setSpacingBefore(6);
 
-        // Headers
-        String[] headers = {"Código", "Descripción", "Cant.", "P. Unit.", "Exenta", "IVA 5%", "IVA 10%"};
+        String[] headers = {"Cód.", "Descripción", "P. Unitario", "Descuento", "Exentas", "5%", "10%"};
         for (String h : headers) {
             PdfPCell cell = new PdfPCell(new Phrase(h, TABLE_HEADER_FONT));
             cell.setBackgroundColor(HEADER_BG);
             cell.setHorizontalAlignment(Element.ALIGN_CENTER);
-            cell.setPadding(5);
+            cell.setPadding(4);
             cell.setBorderColor(HEADER_BG);
             table.addCell(cell);
         }
 
-        // Filas de items
+        BigDecimal totalExenta = BigDecimal.ZERO;
+        BigDecimal totalIva5 = BigDecimal.ZERO;
+        BigDecimal totalIva10 = BigDecimal.ZERO;
+        BigDecimal totalDescuento = BigDecimal.ZERO;
+
         boolean alternateRow = false;
         for (ItemDTO item : items) {
             Color bgColor = alternateRow ? ROW_ALT_BG : Color.WHITE;
@@ -355,31 +340,38 @@ public class KudeService {
             BigDecimal cantidad = item.getCantidad() != null ? item.getCantidad() : BigDecimal.ONE;
             BigDecimal precioUnit = item.getPrecioUnitario() != null ? item.getPrecioUnitario() : BigDecimal.ZERO;
             BigDecimal subtotal = cantidad.multiply(precioUnit);
+            BigDecimal descuento = item.getDescuento() != null ? item.getDescuento() : BigDecimal.ZERO;
+            BigDecimal subtotalNeto = subtotal.subtract(descuento);
 
-            // Clasificar subtotal según tasa IVA
+            totalDescuento = totalDescuento.add(descuento);
+
             BigDecimal exenta = BigDecimal.ZERO;
             BigDecimal iva5 = BigDecimal.ZERO;
             BigDecimal iva10 = BigDecimal.ZERO;
-
             int ivaTipo = item.getIvaTipo();
             BigDecimal tasaIva = item.getIva() != null ? item.getIva() : BigDecimal.ZERO;
 
             if (ivaTipo == 3 || tasaIva.compareTo(BigDecimal.ZERO) == 0) {
-                // Exenta
-                exenta = subtotal;
+                exenta = subtotalNeto;
+                totalExenta = totalExenta.add(subtotalNeto);
             } else if (tasaIva.compareTo(BigDecimal.valueOf(5)) == 0) {
-                iva5 = subtotal;
-            } else if (tasaIva.compareTo(BigDecimal.TEN) == 0) {
-                iva10 = subtotal;
+                iva5 = subtotalNeto;
+                totalIva5 = totalIva5.add(subtotalNeto);
             } else {
-                // Gravada pero tasa no estándar, poner en IVA 10% por defecto
-                iva10 = subtotal;
+                iva10 = subtotalNeto;
+                totalIva10 = totalIva10.add(subtotalNeto);
+            }
+
+            // Descripción incluye cantidad si > 1
+            String desc = nulo(item.getDescripcion());
+            if (cantidad.compareTo(BigDecimal.ONE) > 0) {
+                desc = formatNumber(cantidad) + " x " + desc;
             }
 
             addItemCell(table, nulo(item.getCodigo()), bgColor, Element.ALIGN_CENTER);
-            addItemCell(table, nulo(item.getDescripcion()), bgColor, Element.ALIGN_LEFT);
-            addItemCell(table, formatNumber(cantidad), bgColor, Element.ALIGN_CENTER);
+            addItemCell(table, desc, bgColor, Element.ALIGN_LEFT);
             addItemCell(table, formatCurrency(precioUnit), bgColor, Element.ALIGN_RIGHT);
+            addItemCell(table, descuento.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(descuento) : "", bgColor, Element.ALIGN_RIGHT);
             addItemCell(table, exenta.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(exenta) : "", bgColor, Element.ALIGN_RIGHT);
             addItemCell(table, iva5.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(iva5) : "", bgColor, Element.ALIGN_RIGHT);
             addItemCell(table, iva10.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(iva10) : "", bgColor, Element.ALIGN_RIGHT);
@@ -387,117 +379,109 @@ public class KudeService {
             alternateRow = !alternateRow;
         }
 
-        doc.add(table);
-    }
+        // ── Filas de totales integradas ──
+        BigDecimal totalGeneral = totalExenta.add(totalIva5).add(totalIva10);
 
-    private void addTotales(Document doc, KudeRequest req) throws DocumentException {
-        List<ItemDTO> items = req.getData().getItems();
-        if (items == null) return;
-
-        // Calcular totales
-        BigDecimal totalExenta = BigDecimal.ZERO;
-        BigDecimal totalIva5 = BigDecimal.ZERO;
-        BigDecimal totalIva10 = BigDecimal.ZERO;
-        BigDecimal totalGeneral = BigDecimal.ZERO;
-
-        for (ItemDTO item : items) {
-            BigDecimal cantidad = item.getCantidad() != null ? item.getCantidad() : BigDecimal.ONE;
-            BigDecimal precioUnit = item.getPrecioUnitario() != null ? item.getPrecioUnitario() : BigDecimal.ZERO;
-            BigDecimal subtotal = cantidad.multiply(precioUnit);
-
-            BigDecimal descuento = item.getDescuento() != null ? item.getDescuento() : BigDecimal.ZERO;
-            subtotal = subtotal.subtract(descuento);
-
-            totalGeneral = totalGeneral.add(subtotal);
-
-            int ivaTipo = item.getIvaTipo();
-            BigDecimal tasaIva = item.getIva() != null ? item.getIva() : BigDecimal.ZERO;
-
-            if (ivaTipo == 3 || tasaIva.compareTo(BigDecimal.ZERO) == 0) {
-                totalExenta = totalExenta.add(subtotal);
-            } else if (tasaIva.compareTo(BigDecimal.valueOf(5)) == 0) {
-                totalIva5 = totalIva5.add(subtotal);
-            } else {
-                totalIva10 = totalIva10.add(subtotal);
-            }
-        }
-
-        // Calcular liquidación IVA
         BigDecimal liqIva5 = totalIva5.compareTo(BigDecimal.ZERO) > 0
                 ? totalIva5.multiply(BigDecimal.valueOf(5)).divide(BigDecimal.valueOf(105), 0, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
         BigDecimal liqIva10 = totalIva10.compareTo(BigDecimal.ZERO) > 0
                 ? totalIva10.multiply(BigDecimal.TEN).divide(BigDecimal.valueOf(110), 0, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
-        BigDecimal totalIva = liqIva5.add(liqIva10);
+        BigDecimal totalIvaLiq = liqIva5.add(liqIva10);
 
-        // Tabla de totales (alineada a la derecha)
-        PdfPTable table = new PdfPTable(2);
-        table.setWidthPercentage(50);
-        table.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        table.setWidths(new float[]{1, 1});
+        // Fila SUBTOTALES (colspan=4 cubre Cód+Desc+P.Unit+Desc, luego Exentas+5%+10% = 7 cols)
+        addTotalsRow(table, "SUBTOTAL", formatCurrency(totalExenta), formatCurrency(totalIva5), formatCurrency(totalIva10));
 
-        addTotalRow(table, "Subtotal Exenta:", formatCurrency(totalExenta));
-        addTotalRow(table, "Subtotal IVA 5%:", formatCurrency(totalIva5));
-        addTotalRow(table, "Subtotal IVA 10%:", formatCurrency(totalIva10));
+        // Fila TOTAL (monto en letras ocupa columnas 2-5, monto ocupa col 6-7)
+        PdfPCell totalLabelCell = new PdfPCell(new Phrase("TOTAL DE LA OPERACIÓN", new Font(Font.HELVETICA, 8, Font.BOLD, Color.WHITE)));
+        totalLabelCell.setColspan(2);
+        totalLabelCell.setBackgroundColor(HEADER_BG);
+        totalLabelCell.setHorizontalAlignment(Element.ALIGN_CENTER);
+        totalLabelCell.setPadding(4);
+        table.addCell(totalLabelCell);
 
-        // Separador
-        PdfPCell sepCell = new PdfPCell(new Phrase("", NORMAL_FONT));
-        sepCell.setColspan(2);
-        sepCell.setBorder(Rectangle.BOTTOM);
-        sepCell.setBorderColor(BORDER_COLOR);
-        sepCell.setPadding(2);
-        table.addCell(sepCell);
+        PdfPCell letrasCell = new PdfPCell(new Phrase(montoEnLetras(totalGeneral), new Font(Font.HELVETICA, 7, Font.ITALIC, Color.BLACK)));
+        letrasCell.setColspan(4);
+        letrasCell.setHorizontalAlignment(Element.ALIGN_LEFT);
+        letrasCell.setPadding(4);
+        letrasCell.setBorderColor(BORDER_COLOR);
+        table.addCell(letrasCell);
 
-        addTotalRowBold(table, "TOTAL:", formatCurrency(totalGeneral));
+        PdfPCell totalValCell = new PdfPCell(new Phrase(formatCurrency(totalGeneral), new Font(Font.HELVETICA, 9, Font.BOLD, Color.BLACK)));
+        totalValCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        totalValCell.setPadding(4);
+        totalValCell.setBorderColor(BORDER_COLOR);
+        table.addCell(totalValCell);
 
-        // Liquidación IVA
-        PdfPCell ivaHeaderCell = new PdfPCell(new Phrase("", NORMAL_FONT));
-        ivaHeaderCell.setColspan(2);
-        ivaHeaderCell.setBorder(Rectangle.NO_BORDER);
-        ivaHeaderCell.setPadding(4);
-        table.addCell(ivaHeaderCell);
+        // Fila LIQUIDACIÓN IVA
+        PdfPCell ivaLabelCell = new PdfPCell(new Phrase("LIQUIDACIÓN IVA", new Font(Font.HELVETICA, 7, Font.BOLD, Color.WHITE)));
+        ivaLabelCell.setColspan(2);
+        ivaLabelCell.setBackgroundColor(new Color(100, 120, 140));
+        ivaLabelCell.setHorizontalAlignment(Element.ALIGN_CENTER);
+        ivaLabelCell.setPadding(3);
+        table.addCell(ivaLabelCell);
 
-        addTotalRow(table, "Liq. IVA 5%:", formatCurrency(liqIva5));
-        addTotalRow(table, "Liq. IVA 10%:", formatCurrency(liqIva10));
-        addTotalRowBold(table, "Total IVA:", formatCurrency(totalIva));
+        PdfPCell ivaDetailCell = new PdfPCell(new Phrase(
+                "(5%) " + formatCurrency(liqIva5) + "   (10%) " + formatCurrency(liqIva10) + "   TOTAL IVA: " + formatCurrency(totalIvaLiq),
+                SMALL_FONT));
+        ivaDetailCell.setColspan(5);
+        ivaDetailCell.setHorizontalAlignment(Element.ALIGN_CENTER);
+        ivaDetailCell.setPadding(3);
+        ivaDetailCell.setBorderColor(BORDER_COLOR);
+        table.addCell(ivaDetailCell);
 
         doc.add(table);
+    }
 
-        // Monto en letras
-        Paragraph letras = new Paragraph(montoEnLetras(totalGeneral), BOLD_FONT);
-        letras.setSpacingBefore(4);
-        doc.add(letras);
+    private void addTotalsRow(PdfPTable table, String label, String exenta, String iva5, String iva10) {
+        Font f = new Font(Font.HELVETICA, 7, Font.BOLD, Color.BLACK);
+        // colspan=4: Cód + Desc + P.Unit + Descuento — luego Exentas + 5% + 10% = 7 cols total
+        PdfPCell lbl = new PdfPCell(new Phrase(label, f));
+        lbl.setColspan(4);
+        lbl.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        lbl.setPadding(3);
+        lbl.setBorderColor(BORDER_COLOR);
+        table.addCell(lbl);
+
+        PdfPCell eCell = new PdfPCell(new Phrase(exenta, f));
+        eCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        eCell.setPadding(3);
+        eCell.setBorderColor(BORDER_COLOR);
+        table.addCell(eCell);
+
+        PdfPCell i5Cell = new PdfPCell(new Phrase(iva5, f));
+        i5Cell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        i5Cell.setPadding(3);
+        i5Cell.setBorderColor(BORDER_COLOR);
+        table.addCell(i5Cell);
+
+        PdfPCell i10Cell = new PdfPCell(new Phrase(iva10, f));
+        i10Cell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        i10Cell.setPadding(3);
+        i10Cell.setBorderColor(BORDER_COLOR);
+        table.addCell(i10Cell);
     }
 
     private void addCondicion(Document doc, KudeRequest req) throws DocumentException {
         CondicionDTO condicion = req.getData().getCondicion();
-        if (condicion == null) return;
-
-        String tipoCondicion = condicion.getTipo() == 1 ? "Contado" : "Crédito";
+        if (condicion == null || condicion.getEntregas() == null || condicion.getEntregas().isEmpty()) return;
 
         PdfPTable table = new PdfPTable(1);
         table.setWidthPercentage(100);
+        table.setSpacingBefore(4);
 
         PdfPCell cell = new PdfPCell();
         cell.setBorder(Rectangle.BOX);
         cell.setBorderColor(BORDER_COLOR);
         cell.setPadding(4);
-        cell.addElement(new Paragraph("Condición de Venta: " + tipoCondicion, BOLD_FONT));
+        cell.addElement(new Paragraph("Forma de Pago", BOLD_FONT));
 
-        if (condicion.getEntregas() != null && !condicion.getEntregas().isEmpty()) {
-            for (EntregaDTO entrega : condicion.getEntregas()) {
-                String tipoPago = resolverTipoPago(entrega.getTipo());
-                cell.addElement(new Paragraph(
-                        tipoPago + ": " + formatCurrency(entrega.getMonto())
-                                + " " + nulo(entrega.getMoneda(), "PYG"),
-                        NORMAL_FONT));
-            }
-        }
-
-        if (condicion.getCredito() != null) {
-            CreditoDTO credito = condicion.getCredito();
-            cell.addElement(new Paragraph("Plazo: " + credito.getPlazo() + " días | Cuotas: " + credito.getCuotas(), NORMAL_FONT));
+        for (EntregaDTO entrega : condicion.getEntregas()) {
+            String tipoPago = resolverTipoPago(entrega.getTipo());
+            cell.addElement(new Paragraph(
+                    tipoPago + ": " + formatCurrency(entrega.getMonto()) + " " + nulo(entrega.getMoneda(), "PYG"),
+                    SMALL_FONT));
         }
 
         table.addCell(cell);
@@ -505,11 +489,12 @@ public class KudeService {
     }
 
     private void addQrYCdc(Document doc, PdfWriter writer, KudeRequest req) throws DocumentException {
-        // --- QR centrado a 40 mm ---
-        PdfPTable qrTable = new PdfPTable(1);
-        qrTable.setWidthPercentage(100);
-        qrTable.setSpacingBefore(4);
+        PdfPTable table = new PdfPTable(2);
+        table.setWidthPercentage(100);
+        table.setWidths(new float[]{1, 2});
+        table.setSpacingBefore(6);
 
+        // Columna izquierda: QR
         PdfPCell qrCell = new PdfPCell();
         qrCell.setBorder(Rectangle.NO_BORDER);
         qrCell.setHorizontalAlignment(Element.ALIGN_CENTER);
@@ -530,71 +515,66 @@ public class KudeService {
             qrCell.addElement(new Paragraph("QR no disponible", SMALL_FONT));
         }
 
-        qrTable.addCell(qrCell);
-        doc.add(qrTable);
+        table.addCell(qrCell);
 
-        // --- CDC e info debajo del QR ---
-        PdfPTable infoTable = new PdfPTable(1);
-        infoTable.setWidthPercentage(100);
+        // Columna derecha: texto validación + CDC
+        PdfPCell infoCell = new PdfPCell();
+        infoCell.setBorder(Rectangle.NO_BORDER);
+        infoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        infoCell.setPadding(4);
 
-        PdfPCell cdcCell = new PdfPCell();
-        cdcCell.setBorder(Rectangle.NO_BORDER);
-        cdcCell.setPadding(4);
+        Paragraph valText = new Paragraph(
+                "Consulte la validez de este documento en:\nhttps://ekuatia.set.gov.py/consultas",
+                SMALL_FONT);
+        infoCell.addElement(valText);
 
         if (req.getCdc() != null) {
-            Paragraph cdcLabel = new Paragraph("CDC (Código de Control):", BOLD_FONT);
-            cdcLabel.setAlignment(Element.ALIGN_CENTER);
-            cdcCell.addElement(cdcLabel);
+            infoCell.addElement(new Paragraph("CDC:", BOLD_FONT));
             String cdcFormateado = formatearCdc(req.getCdc());
-            Paragraph cdcPara = new Paragraph(cdcFormateado, new Font(Font.COURIER, 10, Font.BOLD, HEADER_BG));
-            cdcPara.setAlignment(Element.ALIGN_CENTER);
-            cdcCell.addElement(cdcPara);
+            infoCell.addElement(new Paragraph(cdcFormateado, new Font(Font.COURIER, 8, Font.BOLD, HEADER_BG)));
         }
 
         if (req.getEstado() != null) {
             Paragraph estadoPara = new Paragraph();
-            estadoPara.setSpacingBefore(6);
-            estadoPara.setAlignment(Element.ALIGN_CENTER);
+            estadoPara.setSpacingBefore(4);
             estadoPara.add(new Chunk("Estado: ", BOLD_FONT));
-
             Color estadoColor = "APROBADO".equalsIgnoreCase(req.getEstado())
                     ? new Color(39, 174, 96)
                     : new Color(231, 76, 60);
-            estadoPara.add(new Chunk(req.getEstado(), new Font(Font.HELVETICA, 10, Font.BOLD, estadoColor)));
-
+            estadoPara.add(new Chunk(req.getEstado(), new Font(Font.HELVETICA, 9, Font.BOLD, estadoColor)));
             if (req.getCodigoEstado() != null) {
                 estadoPara.add(new Chunk(" (" + req.getCodigoEstado() + ")", NORMAL_FONT));
             }
-            cdcCell.addElement(estadoPara);
+            infoCell.addElement(estadoPara);
         }
 
         if (req.getQrUrl() != null) {
-            Paragraph qrUrlPara = new Paragraph(req.getQrUrl(), SMALL_FONT);
-            qrUrlPara.setSpacingBefore(4);
-            qrUrlPara.setAlignment(Element.ALIGN_CENTER);
-            cdcCell.addElement(qrUrlPara);
+            infoCell.addElement(new Paragraph(req.getQrUrl(), SMALL_FONT));
         }
 
-        infoTable.addCell(cdcCell);
-        doc.add(infoTable);
+        table.addCell(infoCell);
+        doc.add(table);
     }
 
     private void addPie(Document doc) throws DocumentException {
         addLineSeparator(doc, BORDER_COLOR, 0.5f);
 
-        Paragraph pie = new Paragraph(
-                "Este documento es una representación gráfica de un Documento Tributario Electrónico (DTE). " +
-                        "Verifique su validez en https://ekuatia.set.gov.py/consultas",
-                FOOTER_FONT);
-        pie.setAlignment(Element.ALIGN_CENTER);
-        pie.setSpacingBefore(6);
-        doc.add(pie);
+        Paragraph titulo = new Paragraph(
+                "Información de interés del facturador electrónico emisor",
+                new Font(Font.HELVETICA, 7, Font.BOLD, Color.BLACK));
+        titulo.setSpacingBefore(4);
+        doc.add(titulo);
 
-        Paragraph generado = new Paragraph(
-                "Generado por sifen-wrapper v1.0.0",
+        Paragraph info = new Paragraph(
+                "Este DTE fue generado por medios informáticos autorizados. Para verificar su autenticidad " +
+                "tiene un plazo de 72 horas hábiles a partir de su emisión. " +
+                "Consulte en https://ekuatia.set.gov.py/consultas",
                 FOOTER_FONT);
-        generado.setAlignment(Element.ALIGN_CENTER);
-        doc.add(generado);
+        doc.add(info);
+
+        Paragraph pagina = new Paragraph("Página 1 de 1", FOOTER_FONT);
+        pagina.setAlignment(Element.ALIGN_RIGHT);
+        doc.add(pagina);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -641,34 +621,6 @@ public class KudeService {
         cell.setPadding(4);
         cell.setBorderColor(BORDER_COLOR);
         table.addCell(cell);
-    }
-
-    private void addTotalRow(PdfPTable table, String label, String value) {
-        PdfPCell labelCell = new PdfPCell(new Phrase(label, NORMAL_FONT));
-        labelCell.setBorder(Rectangle.NO_BORDER);
-        labelCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        labelCell.setPadding(3);
-        table.addCell(labelCell);
-
-        PdfPCell valueCell = new PdfPCell(new Phrase(value, NORMAL_FONT));
-        valueCell.setBorder(Rectangle.NO_BORDER);
-        valueCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        valueCell.setPadding(3);
-        table.addCell(valueCell);
-    }
-
-    private void addTotalRowBold(PdfPTable table, String label, String value) {
-        PdfPCell labelCell = new PdfPCell(new Phrase(label, TOTAL_FONT));
-        labelCell.setBorder(Rectangle.NO_BORDER);
-        labelCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        labelCell.setPadding(3);
-        table.addCell(labelCell);
-
-        PdfPCell valueCell = new PdfPCell(new Phrase(value, TOTAL_FONT));
-        valueCell.setBorder(Rectangle.NO_BORDER);
-        valueCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        valueCell.setPadding(3);
-        table.addCell(valueCell);
     }
 
     private String formatCurrency(BigDecimal value) {
