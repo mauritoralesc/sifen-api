@@ -13,8 +13,8 @@ public class ResendProperties {
     private String apiKey;
 
     /** Correo remitente verificado en Resend. */
-    private String fromEmail = "no-reply@sifen-wrapper.com";
+    private String fromEmail = "no-reply@synctema.com";
 
     /** Nombre visible del remitente. */
-    private String fromName = "SIFEN Wrapper";
+    private String fromName = "SYNCTEMA";
 }

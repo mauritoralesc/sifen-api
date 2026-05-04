@@ -45,8 +45,8 @@ sifen:
 
 resend:
   api-key: ${RESEND_API_KEY:}
-  from-email: ${RESEND_FROM_EMAIL:no-reply@sifen-wrapper.com}
-  from-name: ${RESEND_FROM_NAME:SIFEN Wrapper}
+  from-email: ${RESEND_FROM_EMAIL:no-reply@synctema.com}
+  from-name: ${RESEND_FROM_NAME:SYNCTEMA}
 
 logging:
   level:

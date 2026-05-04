@@ -24,7 +24,7 @@ public class AdminSeeder implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        if (userRepository.existsByEmail("admin@sifen-wrapper.com")) {
+        if (userRepository.existsByEmail("admin@synctema.com")) {
             log.debug("Admin user already exists, skipping seed");
             return;
         }
@@ -39,7 +39,7 @@ public class AdminSeeder implements CommandLineRunner {
                 .build());
 
         User admin = userRepository.save(User.builder()
-                .email("admin@sifen-wrapper.com")
+                .email("admin@synctema.com")
                 .passwordHash(passwordEncoder.encode("admin123"))
                 .fullName("Administrador")
                 .build());
@@ -50,7 +50,7 @@ public class AdminSeeder implements CommandLineRunner {
                 .role(User.Role.ADMIN)
                 .build());
 
-        log.info("Usuario admin creado: admin@sifen-wrapper.com / admin123");
+        log.info("Usuario admin creado: admin@synctema.com / admin123");
         log.warn("⚠ Cambie la contraseña del admin en producción");
     }
 }

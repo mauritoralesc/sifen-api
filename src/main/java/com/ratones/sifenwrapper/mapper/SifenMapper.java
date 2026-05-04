@@ -363,6 +363,41 @@ public class SifenMapper {
                 if (e.getMoneda() != null) {
                     entrega.setcMoneTiPag(CMondT.valueOf(e.getMoneda()));
                 }
+                if (e.getTipoCambio() != null) {
+                    entrega.setdTiCamTiPag(e.getTipoCambio());
+                }
+                // Tarjeta de crédito (3) o débito (4)
+                if (e.getTipo() == 3 || e.getTipo() == 4) {
+                    TgPagTarCD tarjeta = new TgPagTarCD();
+                    tarjeta.setiDenTarj(TiDenTarj.getByVal(e.getDenominacionTarjeta().shortValue()));
+                    tarjeta.setiForProPa(TiForProPa.getByVal(e.getFormaProcesamiento().shortValue()));
+                    if (e.getRazonSocialProcesadora() != null) {
+                        tarjeta.setdRSProTar(e.getRazonSocialProcesadora());
+                    }
+                    if (e.getRucProcesadora() != null) {
+                        tarjeta.setdRUCProTar(e.getRucProcesadora());
+                    }
+                    if (e.getDvProcesadora() != null) {
+                        tarjeta.setdDVProTar(e.getDvProcesadora());
+                    }
+                    if (e.getCodigoAutorizacion() != null) {
+                        tarjeta.setdCodAuOpe(e.getCodigoAutorizacion().intValue());
+                    }
+                    if (e.getNombreTitular() != null) {
+                        tarjeta.setdNomTit(e.getNombreTitular());
+                    }
+                    if (e.getNumerosUltimosTarjeta() != null) {
+                        tarjeta.setdNumTarj(e.getNumerosUltimosTarjeta());
+                    }
+                    entrega.setgPagTarCD(tarjeta);
+                }
+                // Cheque (2)
+                else if (e.getTipo() == 2) {
+                    TgPagCheq cheque = new TgPagCheq();
+                    cheque.setdNumCheq(e.getNumeroCheque());
+                    cheque.setdBcoEmi(e.getBancoEmisor());
+                    entrega.setgPagCheq(cheque);
+                }
                 entregas.add(entrega);
             }
             camCond.setgPaConEIniList(entregas);

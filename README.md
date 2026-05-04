@@ -11,6 +11,7 @@ El aislamiento multi-tenant se mantiene por `companyId` (JWT/API Key).
 ## Documentacion adicional
 
 - [Guia de integracion frontend con Next.js](docs/frontend-integration-nextjs.md)
+- [Métodos de pago — Guía de integración para el ERP](docs/metodos-de-pago.md)
 
 ## Requisitos
 
@@ -39,7 +40,7 @@ El aislamiento multi-tenant se mantiene por `companyId` (JWT/API Key).
 | `SIFEN_BATCH_MIN_WAIT` | Segundos mínimos antes de consultar un lote | No | `600` |
 | `SIFEN_BATCH_MAX_AGE` | Horas máximas para consulta por lote (luego usa CDC individual) | No | `48` |
 | `RESEND_API_KEY` | API Key de Resend para envío de correos | **Sí (si se usa email)** | vacío |
-| `RESEND_FROM_EMAIL` | Email remitente (debe estar verificado en Resend) | No | `no-reply@sifen-wrapper.com` |
+| `RESEND_FROM_EMAIL` | Email remitente (debe estar verificado en Resend) | No | `no-reply@synctema.com` |
 | `RESEND_FROM_NAME` | Nombre visible del remitente | No | `SIFEN Wrapper` |
 
 Generar la clave de cifrado:
@@ -85,7 +86,7 @@ sifen:
 
 resend:
   api-key: ${RESEND_API_KEY:}
-  from-email: ${RESEND_FROM_EMAIL:no-reply@sifen-wrapper.com}
+  from-email: ${RESEND_FROM_EMAIL:no-reply@synctema.com}
   from-name: ${RESEND_FROM_NAME:SIFEN Wrapper}
 ```
 
@@ -103,7 +104,7 @@ mvn spring-boot:run
 
 Al primer arranque se crea automáticamente:
 - **Empresa:** "Administración" (RUC: 00000000)
-- **Usuario admin:** `admin@sifen-wrapper.com` / `admin123`
+- **Usuario admin:** `admin@synctema.com` / `admin123`
 - **Membresía:** usuario admin con rol `ADMIN` en la empresa "Administración"
 
 > **Importante:** cambiar la contraseña del admin en producción.

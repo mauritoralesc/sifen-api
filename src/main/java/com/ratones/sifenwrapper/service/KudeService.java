@@ -43,7 +43,7 @@ public class KudeService {
     private static final Color ROW_ALT_BG = new Color(245, 245, 245);
     private static final Color BORDER_COLOR = new Color(200, 200, 200);
 
-    private static final float QR_SIZE_PT = 40 * 72f / 25.4f; // 40 mm en puntos PDF
+    private static final float QR_SIZE_PT = 28 * 72f / 25.4f; // 28 mm en puntos PDF
     private static final float LOGO_MAX_WIDTH_PT = 90f;
     private static final float LOGO_MAX_HEIGHT_PT = 60f;
 
@@ -54,44 +54,44 @@ public class KudeService {
      */
     public byte[] generarKude(KudeRequest request) {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            Document document = new Document(PageSize.A4, 36, 36, 36, 36);
+            Document document = new Document(PageSize.A4, 28, 28, 24, 24);
             PdfWriter writer = PdfWriter.getInstance(document, baos);
             document.open();
 
             // Encabezado del documento
             addEncabezado(document, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // Información del documento
             addInfoDocumento(document, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // Información del cliente
             addInfoCliente(document, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // Tabla de items
             addTablaItems(document, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // Totales
             addTotales(document, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // Condición de venta
             addCondicion(document, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // QR y CDC
             addQrYCdc(document, writer, request);
 
-            document.add(new Paragraph(" ", SMALL_FONT));
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
             // Pie de página
             addPie(document);
@@ -230,7 +230,7 @@ public class KudeService {
         PdfPCell leftCell = new PdfPCell();
         leftCell.setBorder(Rectangle.BOX);
         leftCell.setBorderColor(BORDER_COLOR);
-        leftCell.setPadding(8);
+        leftCell.setPadding(5);
 
         String numero = String.format("%s-%s-%s",
                 data.getEstablecimiento(), data.getPunto(), data.getNumero());
@@ -244,7 +244,7 @@ public class KudeService {
         PdfPCell rightCell = new PdfPCell();
         rightCell.setBorder(Rectangle.BOX);
         rightCell.setBorderColor(BORDER_COLOR);
-        rightCell.setPadding(8);
+        rightCell.setPadding(5);
 
         rightCell.addElement(new Paragraph("Fecha Emisión: " + formatearFecha(data.getFecha()), BOLD_FONT));
         rightCell.addElement(new Paragraph("Tipo Transacción: " + resolverTipoTransaccion(data.getTipoTransaccion()), NORMAL_FONT));
@@ -274,7 +274,7 @@ public class KudeService {
         PdfPCell leftCell = new PdfPCell();
         leftCell.setBorder(Rectangle.BOX);
         leftCell.setBorderColor(BORDER_COLOR);
-        leftCell.setPadding(8);
+        leftCell.setPadding(5);
 
         leftCell.addElement(new Paragraph("Nombre/Razón Social: " + nombreReceptor, BOLD_FONT));
         leftCell.addElement(new Paragraph("RUC/CI: " + docReceptor, NORMAL_FONT));
@@ -287,7 +287,7 @@ public class KudeService {
         PdfPCell rightCell = new PdfPCell();
         rightCell.setBorder(Rectangle.BOX);
         rightCell.setBorderColor(BORDER_COLOR);
-        rightCell.setPadding(8);
+        rightCell.setPadding(5);
 
         StringBuilder dir = new StringBuilder();
         if (cliente.getDireccion() != null) dir.append(cliente.getDireccion());
@@ -463,6 +463,11 @@ public class KudeService {
         addTotalRowBold(table, "Total IVA:", formatCurrency(totalIva));
 
         doc.add(table);
+
+        // Monto en letras
+        Paragraph letras = new Paragraph(montoEnLetras(totalGeneral), BOLD_FONT);
+        letras.setSpacingBefore(4);
+        doc.add(letras);
     }
 
     private void addCondicion(Document doc, KudeRequest req) throws DocumentException {
@@ -477,7 +482,7 @@ public class KudeService {
         PdfPCell cell = new PdfPCell();
         cell.setBorder(Rectangle.BOX);
         cell.setBorderColor(BORDER_COLOR);
-        cell.setPadding(6);
+        cell.setPadding(4);
         cell.addElement(new Paragraph("Condición de Venta: " + tipoCondicion, BOLD_FONT));
 
         if (condicion.getEntregas() != null && !condicion.getEntregas().isEmpty()) {
@@ -668,7 +673,7 @@ public class KudeService {
 
     private String formatCurrency(BigDecimal value) {
         if (value == null) return "0";
-        return String.format("%,.0f", value);
+        return String.format("%,.0f", value).replace(',', '.');
     }
 
     private String formatNumber(BigDecimal value) {
@@ -762,5 +767,65 @@ public class KudeService {
             case 21 -> "Cortesía";
             default -> "Tipo " + tipo;
         };
+    }
+
+    // ─── Monto en letras ──────────────────────────────────────────────────────
+
+    private static final String[] UNIDADES = {
+        "", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE",
+        "DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISÉIS",
+        "DIECISIETE", "DIECIOCHO", "DIECINUEVE"
+    };
+    private static final String[] DECENAS = {
+        "", "DIEZ", "VEINTE", "TREINTA", "CUARENTA",
+        "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"
+    };
+    private static final String[] CENTENAS = {
+        "", "CIEN", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS",
+        "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"
+    };
+
+    private String montoEnLetras(BigDecimal amount) {
+        if (amount == null) return "";
+        long monto = amount.setScale(0, RoundingMode.HALF_UP).longValue();
+        return "Son: " + numeroEnLetras(monto) + " GUARANÍES";
+    }
+
+    private String numeroEnLetras(long n) {
+        if (n == 0) return "CERO";
+        StringBuilder sb = new StringBuilder();
+        if (n >= 1_000_000_000L) {
+            long b = n / 1_000_000_000L;
+            sb.append(numeroEnLetras(b)).append(b == 1 ? " MIL MILLÓN" : " MIL MILLONES");
+            n %= 1_000_000_000L;
+            if (n > 0) sb.append(" ");
+        }
+        if (n >= 1_000_000L) {
+            long m = n / 1_000_000L;
+            sb.append(numeroEnLetras(m)).append(m == 1 ? " MILLÓN" : " MILLONES");
+            n %= 1_000_000L;
+            if (n > 0) sb.append(" ");
+        }
+        if (n >= 1_000L) {
+            long t = n / 1_000L;
+            sb.append(t == 1 ? "MIL" : numeroEnLetras(t) + " MIL");
+            n %= 1_000L;
+            if (n > 0) sb.append(" ");
+        }
+        if (n >= 100L) {
+            int c = (int) (n / 100);
+            sb.append(c == 1 && n % 100 > 0 ? "CIENTO" : CENTENAS[c]);
+            n %= 100;
+            if (n > 0) sb.append(" ");
+        }
+        if (n >= 20) {
+            sb.append(DECENAS[(int) (n / 10)]);
+            n %= 10;
+            if (n > 0) sb.append(" Y ");
+        }
+        if (n > 0) {
+            sb.append(UNIDADES[(int) n]);
+        }
+        return sb.toString().trim();
     }
 }

@@ -176,7 +176,7 @@ public class InvoiceEmailService {
                       <li><strong>Detalle:</strong> %s</li>
                     </ul>
                     <p><strong>QR:</strong> <a href=\"%s\">Ver comprobante</a></p>
-                    <p>Este correo fue generado automáticamente por SIFEN Wrapper.</p>
+                    <p>Este correo fue generado automáticamente por SYNCTEMA.</p>
                   </body>
                 </html>
                 """.formatted(

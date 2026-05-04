@@ -356,7 +356,7 @@ Health básico desde VPS:
 ```bash
 curl -i -X POST http://127.0.0.1:18000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@sifen-wrapper.com","password":"admin123"}'
+  -d '{"email":"admin@synctema.com","password":"admin123"}'
 ```
 
 Verificación por dominio:
@@ -364,7 +364,7 @@ Verificación por dominio:
 ```bash
 curl -i -X POST https://sifenapi.ratones.dev/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@sifen-wrapper.com","password":"admin123"}'
+  -d '{"email":"admin@synctema.com","password":"admin123"}'
 ```
 
 Si el login devuelve JSON del backend (token o error de credenciales), el proxy está funcionando.
