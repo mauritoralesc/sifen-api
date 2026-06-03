@@ -9,10 +9,10 @@ import java.util.List;
 @Builder
 public class ConsultaRucResponse {
     private String ruc;
+    private String dv;
     private String razonSocial;
     private String estado;
     private String codigoEstado;
     private String descripcionEstado;
     private List<MensajeSifenDTO> mensajes;
-    private RespuestaSifenDTO respuestaSifen;
 }

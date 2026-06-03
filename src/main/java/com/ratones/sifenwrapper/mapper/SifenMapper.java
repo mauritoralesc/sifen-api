@@ -153,8 +153,12 @@ public class SifenMapper {
             emisor.setdDesDisEmi(est.getDistritoDescripcion());
             emisor.setcCiuEmi(est.getCiudad());
             emisor.setdDesCiuEmi(est.getCiudadDescripcion());
-            emisor.setdTelEmi(est.getTelefono());
-            emisor.setdEmailE(est.getEmail());
+            if (est.getTelefono() != null && !est.getTelefono().trim().isEmpty()) {
+                emisor.setdTelEmi(est.getTelefono());
+            }
+            if (est.getEmail() != null && !est.getEmail().trim().isEmpty()) {
+                emisor.setdEmailE(est.getEmail());
+            }
             if (est.getDenominacion() != null) {
                 emisor.setdDenSuc(est.getDenominacion());
             }
@@ -215,7 +219,9 @@ public class SifenMapper {
         receptor.setcCiuRec(cliente.getCiudad());
         receptor.setdDesCiuRec(cliente.getCiudadDescripcion());
         receptor.setdTelRec(cliente.getTelefono());
-        receptor.setdEmailRec(cliente.getEmail());
+        if (cliente.getEmail() != null && !cliente.getEmail().trim().isEmpty()) {
+            receptor.setdEmailRec(cliente.getEmail().trim());
+        }
         receptor.setdCodCliente(cliente.getCodigo());
 
         return receptor;

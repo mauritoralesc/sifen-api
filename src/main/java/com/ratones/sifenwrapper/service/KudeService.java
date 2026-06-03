@@ -112,40 +112,36 @@ public class KudeService {
         String tipoDoc = resolverTipoDocumento(data.getTipoDocumento());
         String numero = String.format("%s-%s-%s", data.getEstablecimiento(), data.getPunto(), data.getNumero());
 
-        // Tabla principal: 2 columnas — info empresa (izq) | caja doc (der)
-        PdfPTable mainTable = new PdfPTable(2);
+        // Tabla principal: 3 columnas — logo | info empresa | caja doc
+        // (3 cols evita tablas anidadas que causan desbordamiento de ancho)
+        PdfPTable mainTable = new PdfPTable(3);
         mainTable.setWidthPercentage(100);
-        mainTable.setWidths(new float[]{3, 2});
+        mainTable.setWidths(new float[]{1.2f, 2.3f, 2f});
 
-        // ── Columna izquierda: logo + info empresa ──
-        PdfPCell leftCell = new PdfPCell();
-        leftCell.setBorder(Rectangle.NO_BORDER);
-        leftCell.setPadding(4);
-        leftCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
-
-        // Logo + razón social en sub-tabla
-        PdfPTable logoTable = new PdfPTable(2);
-        logoTable.setWidthPercentage(100);
-        logoTable.setWidths(new float[]{1, 4});
+        // ── Columna 1: logo ──
         Image logo = buildLogoImage(params != null ? params.getLogoBase64() : null);
-        PdfPCell lcell = new PdfPCell();
-        lcell.setBorder(Rectangle.NO_BORDER);
-        lcell.setVerticalAlignment(Element.ALIGN_MIDDLE);
-        if (logo != null) lcell.addElement(logo);
-        logoTable.addCell(lcell);
-
-        PdfPCell rcell = new PdfPCell();
-        rcell.setBorder(Rectangle.NO_BORDER);
-        rcell.setVerticalAlignment(Element.ALIGN_MIDDLE);
-        Paragraph razon = new Paragraph(params.getRazonSocial(), TITLE_FONT);
-        rcell.addElement(razon);
-        if (params.getNombreFantasia() != null && !params.getNombreFantasia().isBlank()) {
-            rcell.addElement(new Paragraph(params.getNombreFantasia(), NORMAL_FONT));
+        PdfPCell logoCell = new PdfPCell();
+        logoCell.setBorder(Rectangle.NO_BORDER);
+        logoCell.setPadding(4);
+        logoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        logoCell.setHorizontalAlignment(Element.ALIGN_LEFT);
+        if (logo != null) {
+            logo.setAlignment(Image.ALIGN_LEFT);
+            logoCell.addElement(logo);
         }
-        logoTable.addCell(rcell);
-        leftCell.addElement(logoTable);
+        mainTable.addCell(logoCell);
 
-        leftCell.addElement(new Paragraph("RUC: " + params.getRuc(), BOLD_FONT));
+        // ── Columna 2: razón social + dirección + actividad ──
+        PdfPCell infoCell = new PdfPCell();
+        infoCell.setBorder(Rectangle.NO_BORDER);
+        infoCell.setPadding(4);
+        infoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+
+        infoCell.addElement(new Paragraph(params.getRazonSocial(), TITLE_FONT));
+        if (params.getNombreFantasia() != null && !params.getNombreFantasia().isBlank()) {
+            infoCell.addElement(new Paragraph(params.getNombreFantasia(), NORMAL_FONT));
+        }
+        infoCell.addElement(new Paragraph("RUC: " + params.getRuc(), BOLD_FONT));
 
         if (params.getEstablecimientos() != null && !params.getEstablecimientos().isEmpty()) {
             EstablecimientoDTO est = params.getEstablecimientos().get(0);
@@ -153,18 +149,18 @@ public class KudeService {
             if (est.getDireccion() != null) dir.append(est.getDireccion());
             if (est.getCiudadDescripcion() != null) dir.append(" - ").append(est.getCiudadDescripcion());
             if (est.getDepartamentoDescripcion() != null) dir.append(", ").append(est.getDepartamentoDescripcion());
-            leftCell.addElement(new Paragraph(dir.toString(), SMALL_FONT));
-            if (est.getTelefono() != null) leftCell.addElement(new Paragraph("Tel: " + est.getTelefono(), SMALL_FONT));
-            if (est.getEmail() != null) leftCell.addElement(new Paragraph("Email: " + est.getEmail(), SMALL_FONT));
+            infoCell.addElement(new Paragraph(dir.toString(), SMALL_FONT));
+            if (est.getTelefono() != null) infoCell.addElement(new Paragraph("Tel: " + est.getTelefono(), SMALL_FONT));
+            if (est.getEmail() != null) infoCell.addElement(new Paragraph("Email: " + est.getEmail(), SMALL_FONT));
         }
         if (params.getActividadesEconomicas() != null && !params.getActividadesEconomicas().isEmpty()) {
             String act = params.getActividadesEconomicas().stream()
                     .map(ActividadEconomicaDTO::getDescripcion)
                     .collect(java.util.stream.Collectors.joining(" / "));
-            leftCell.addElement(new Paragraph("Act. Económica: " + act, SMALL_FONT));
+            infoCell.addElement(new Paragraph("Act. Económica: " + act, SMALL_FONT));
         }
 
-        mainTable.addCell(leftCell);
+        mainTable.addCell(infoCell);
 
         // ── Columna derecha: caja de documento con borde ──
         PdfPCell rightCell = new PdfPCell();
@@ -312,13 +308,13 @@ public class KudeService {
         List<ItemDTO> items = req.getData().getItems();
         if (items == null || items.isEmpty()) return;
 
-        // Tabla: Cod | Descripción | P. Unit. | Descuento | Exentas | 5% | 10%
+        // Tabla: Cod | Cant. | Descripción | P. Unit. | Exentas | 5% | 10%
         PdfPTable table = new PdfPTable(7);
         table.setWidthPercentage(100);
-        table.setWidths(new float[]{10, 32, 14, 12, 12, 10, 10});
+        table.setWidths(new float[]{10, 12, 30, 15, 13, 10, 10});
         table.setSpacingBefore(6);
 
-        String[] headers = {"Cód.", "Descripción", "P. Unitario", "Descuento", "Exentas", "5%", "10%"};
+        String[] headers = {"Cód.", "Cant.", "Descripción", "P. Unitario", "Exentas", "5%", "10%"};
         for (String h : headers) {
             PdfPCell cell = new PdfPCell(new Phrase(h, TABLE_HEADER_FONT));
             cell.setBackgroundColor(HEADER_BG);
@@ -331,7 +327,6 @@ public class KudeService {
         BigDecimal totalExenta = BigDecimal.ZERO;
         BigDecimal totalIva5 = BigDecimal.ZERO;
         BigDecimal totalIva10 = BigDecimal.ZERO;
-        BigDecimal totalDescuento = BigDecimal.ZERO;
 
         boolean alternateRow = false;
         for (ItemDTO item : items) {
@@ -342,8 +337,6 @@ public class KudeService {
             BigDecimal subtotal = cantidad.multiply(precioUnit);
             BigDecimal descuento = item.getDescuento() != null ? item.getDescuento() : BigDecimal.ZERO;
             BigDecimal subtotalNeto = subtotal.subtract(descuento);
-
-            totalDescuento = totalDescuento.add(descuento);
 
             BigDecimal exenta = BigDecimal.ZERO;
             BigDecimal iva5 = BigDecimal.ZERO;
@@ -362,16 +355,12 @@ public class KudeService {
                 totalIva10 = totalIva10.add(subtotalNeto);
             }
 
-            // Descripción incluye cantidad si > 1
             String desc = nulo(item.getDescripcion());
-            if (cantidad.compareTo(BigDecimal.ONE) > 0) {
-                desc = formatNumber(cantidad) + " x " + desc;
-            }
 
             addItemCell(table, nulo(item.getCodigo()), bgColor, Element.ALIGN_CENTER);
+            addItemCell(table, formatNumber(cantidad), bgColor, Element.ALIGN_CENTER);
             addItemCell(table, desc, bgColor, Element.ALIGN_LEFT);
             addItemCell(table, formatCurrency(precioUnit), bgColor, Element.ALIGN_RIGHT);
-            addItemCell(table, descuento.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(descuento) : "", bgColor, Element.ALIGN_RIGHT);
             addItemCell(table, exenta.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(exenta) : "", bgColor, Element.ALIGN_RIGHT);
             addItemCell(table, iva5.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(iva5) : "", bgColor, Element.ALIGN_RIGHT);
             addItemCell(table, iva10.compareTo(BigDecimal.ZERO) > 0 ? formatCurrency(iva10) : "", bgColor, Element.ALIGN_RIGHT);

@@ -2,6 +2,7 @@ package com.ratones.sifenwrapper.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.dao.DataIntegrityViolationException;
 import com.roshka.sifen.Sifen;
 import com.roshka.sifen.core.SifenConfig;
 import com.roshka.sifen.core.beans.DocumentoElectronico;
@@ -16,6 +17,7 @@ import com.roshka.sifen.core.fields.response.de.TxContenDE;
 import com.roshka.sifen.core.fields.response.event.TgResProcEVe;
 import com.roshka.sifen.core.types.*;
 import com.roshka.sifen.internal.ctx.GenerationCtx;
+import com.roshka.sifen.internal.util.SifenUtil;
 import com.ratones.sifenwrapper.dto.request.ClienteDTO;
 import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
 import com.ratones.sifenwrapper.dto.request.EventoRequest;
@@ -78,13 +80,12 @@ public class InvoiceService {
                 sifenConfig.setCSC(request.getQr().getCsc());
             }
 
-            Sifen.setSifenConfig(sifenConfig);
-
-            // Mapear DTO → DocumentoElectronico
+            // Mapear DTO → DocumentoElectronico (sin lock: no usa el config estático)
             DocumentoElectronico de = SifenMapper.toDocumentoElectronico(request);
 
-            // Llamar al servicio de recepción síncrona de SIFEN
-            RespuestaRecepcionDE respuesta = Sifen.recepcionDE(de);
+            // Llamar al servicio de recepción síncrona de SIFEN dentro del lock global
+            RespuestaRecepcionDE respuesta = sifenConfigFactory.withSifenConfig(sifenConfig,
+                    () -> Sifen.recepcionDE(de));
 
             return buildEmisionResponse(request, de, respuesta, request.isIncludeKude());
 
@@ -114,13 +115,17 @@ public class InvoiceService {
                 sifenConfig.setCSC(request.getQr().getCsc());
             }
 
-            Sifen.setSifenConfig(sifenConfig);
-
             DocumentoElectronico de = SifenMapper.toDocumentoElectronico(request);
 
             // Generar XML firmado + CDC + QR sin enviar a SIFEN
-            GenerationCtx ctx = GenerationCtx.getDefaultFromConfig(sifenConfig);
-            String xmlFirmado = de.generarXml(ctx, sifenConfig);
+            // Se usa el lock global porque la librería puede leer el config estático internamente
+            final String[] xmlResult = new String[1];
+            sifenConfigFactory.withSifenConfig(sifenConfig, () -> {
+                GenerationCtx ctx = GenerationCtx.getDefaultFromConfig(sifenConfig);
+                xmlResult[0] = de.generarXml(ctx, sifenConfig);
+                return null;
+            });
+            String xmlFirmado = xmlResult[0];
             String cdc = de.getId();
             String qrUrl = de.getEnlaceQR();
 
@@ -148,7 +153,12 @@ public class InvoiceService {
                     .qrUrl(qrUrl)
                     .requestData(requestJson)
                     .build();
-            electronicDocumentRepository.save(doc);
+            try {
+                electronicDocumentRepository.save(doc);
+            } catch (DataIntegrityViolationException e) {
+                throw new IllegalArgumentException(
+                        "Ya existe un documento con CDC " + cdc + " para esta empresa");
+            }
 
             log.info("[PREPARE] DE persistido - CDC: {}, estado: PREPARADO", cdc);
 
@@ -197,7 +207,10 @@ public class InvoiceService {
     // ─── Consulta estado local por CDC ────────────────────────────────────────
 
     public DocumentStatusResponse consultarEstadoLocal(String cdc, boolean refresh) {
-        Optional<ElectronicDocument> optDoc = electronicDocumentRepository.findByCdc(cdc);
+        Long tenantId = TenantContext.get();
+        Optional<ElectronicDocument> optDoc = tenantId != null
+                ? electronicDocumentRepository.findByCompanyIdAndCdc(tenantId, cdc)
+                : electronicDocumentRepository.findByCdc(cdc);
 
         if (optDoc.isEmpty()) {
             // No existe localmente — intentar consulta directa a SIFEN
@@ -224,15 +237,97 @@ public class InvoiceService {
 
         ElectronicDocument doc = optDoc.get();
 
-        // Si refresh=true y el estado es ENVIADO (ya está en SIFEN pero sin resultado),
-        // consultar a SIFEN para obtener el estado final.
+        // Si refresh=true y el estado es ENVIADO, consultar a SIFEN para obtener el estado final.
         // NO consultar si está PREPARADO (aún no fue enviado, SIFEN respondería "No Existe").
+        // IMPORTANTE: antes de consultar por CDC individual, verificar el estado del lote.
+        // Si el lote sigue en procesamiento (0361), la consulta CDC devuelve 0422
+        // ("No Existe o Rechazado") aunque el documento sea válido — falso negativo.
         if (refresh && "ENVIADO".equals(doc.getEstado())) {
             try {
-                // Configurar tenant para la consulta
                 SifenConfig sifenConfig = sifenConfigFactory.getConfigForCompany(doc.getCompanyId());
-                Sifen.setSifenConfig(sifenConfig);
-                RespuestaConsultaDE respuesta = Sifen.consultaDE(cdc);
+
+                // Verificar estado del lote si el documento fue enviado en batch
+                if (doc.getNroLote() != null) {
+                    RespuestaConsultaLoteDE respuestaLote = sifenConfigFactory.withSifenConfig(sifenConfig,
+                            () -> Sifen.consultaLoteDE(doc.getNroLote()));
+
+                    String codResLot = respuestaLote != null
+                            ? (respuestaLote.getdCodResLot() != null
+                                    ? respuestaLote.getdCodResLot()
+                                    : respuestaLote.getdCodRes())
+                            : null;
+
+                    if ("0361".equals(codResLot)) {
+                        // Lote todavía en procesamiento — no consultar por CDC, es falso negativo
+                        log.debug("[REFRESH] Lote {} en procesamiento, omitiendo consulta CDC para {}",
+                                doc.getNroLote(), cdc);
+                        return DocumentStatusResponse.builder()
+                                .cdc(doc.getCdc())
+                                .estado(doc.getEstado())
+                                .codigoEstado("0361")
+                                .descripcionEstado("Lote en procesamiento — resultado pendiente")
+                                .nroLote(doc.getNroLote())
+                                .qrUrl(doc.getQrUrl())
+                                .createdAt(doc.getCreatedAt())
+                                .sentAt(doc.getSentAt())
+                                .processedAt(doc.getProcessedAt())
+                                .build();
+                    }
+
+                    if ("0362".equals(codResLot)) {
+                        // Lote concluido — leer resultado individual del CDC desde la respuesta del lote.
+                        // NO llamar consultaDE: SIFEN puede devolver 0422 por latencia o el código
+                        // inverted (0420) si el cliente está usando una versión anterior del wrapper.
+                        java.util.List<TgResProcLote> resultados = respuestaLote.getgResProcLoteList();
+                        if (resultados != null) {
+                            for (TgResProcLote res : resultados) {
+                                if (cdc.equals(res.getId())
+                                        && res.getgResProc() != null
+                                        && !res.getgResProc().isEmpty()) {
+                                    TgResProc gResProc = res.getgResProc().get(0);
+                                    String estadoAnterior = doc.getEstado();
+                                    String nuevoEstado = resolverEstadoDocumento(gResProc.getdCodRes());
+                                    if (!"DESCONOCIDO".equals(nuevoEstado)) {
+                                        doc.setEstado(nuevoEstado);
+                                        doc.setSifenCodigo(gResProc.getdCodRes());
+                                        doc.setSifenMensaje(gResProc.getdMsgRes());
+                                        doc.setProcessedAt(LocalDateTime.now());
+                                        electronicDocumentRepository.save(doc);
+                                        log.info("[STATUS-UPDATE] CDC: {} → {} (resultado de lote)", cdc, nuevoEstado);
+
+                                        if (!estadoAnterior.equals(nuevoEstado) && isApprovedState(nuevoEstado)) {
+                                            InvoiceEmailService.EmailDispatchResult emailResult =
+                                                    invoiceEmailService.sendApprovedEmail(doc);
+                                            if (!emailResult.sent()) {
+                                                log.warn("[EMAIL] No se envió correo para CDC {}: {}",
+                                                        cdc, emailResult.reason());
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        // Retornar estado actualizado
+                        ElectronicDocument updatedDoc = electronicDocumentRepository
+                                .findById(doc.getId()).orElse(doc);
+                        return DocumentStatusResponse.builder()
+                                .cdc(updatedDoc.getCdc())
+                                .estado(updatedDoc.getEstado())
+                                .codigoEstado(updatedDoc.getSifenCodigo())
+                                .descripcionEstado(updatedDoc.getSifenMensaje())
+                                .nroLote(updatedDoc.getNroLote())
+                                .qrUrl(updatedDoc.getQrUrl())
+                                .createdAt(updatedDoc.getCreatedAt())
+                                .sentAt(updatedDoc.getSentAt())
+                                .processedAt(updatedDoc.getProcessedAt())
+                                .build();
+                    }
+                }
+
+                // Lote extemporáneo (0364), sin nroLote o código desconocido → consultar por CDC individual
+                RespuestaConsultaDE respuesta = sifenConfigFactory.withSifenConfig(sifenConfig,
+                        () -> Sifen.consultaDE(cdc));
 
                 if (respuesta != null && respuesta.getdCodRes() != null) {
                     String estadoAnterior = doc.getEstado();
@@ -279,7 +374,7 @@ public class InvoiceService {
         try {
             log.info("Enviando lote de {} documentos", requests.size());
 
-            Sifen.setSifenConfig(sifenConfigFactory.getConfigForCurrentTenant());
+            SifenConfig config = sifenConfigFactory.getConfigForCurrentTenant();
 
             List<DocumentoElectronico> documentos = new ArrayList<>();
             for (EmitirFacturaRequest req : requests) {
@@ -288,7 +383,8 @@ public class InvoiceService {
                 documentos.add(SifenMapper.toDocumentoElectronico(req));
             }
 
-            RespuestaRecepcionLoteDE respuesta = Sifen.recepcionLoteDE(documentos);
+            RespuestaRecepcionLoteDE respuesta = sifenConfigFactory.withSifenConfig(config,
+                    () -> Sifen.recepcionLoteDE(documentos));
             return buildLoteResponse(respuesta);
 
         } catch (SifenException e) {
@@ -303,8 +399,9 @@ public class InvoiceService {
     public ConsultaEstadoLoteResponse consultarEstadoLote(String nroLote) {
         try {
             log.info("Consultando estado del lote: {}", nroLote);
-            Sifen.setSifenConfig(sifenConfigFactory.getConfigForCurrentTenant());
-            RespuestaConsultaLoteDE respuesta = Sifen.consultaLoteDE(nroLote);
+            SifenConfig config = sifenConfigFactory.getConfigForCurrentTenant();
+            RespuestaConsultaLoteDE respuesta = sifenConfigFactory.withSifenConfig(config,
+                    () -> Sifen.consultaLoteDE(nroLote));
             return buildConsultaLoteResponse(nroLote, respuesta);
         } catch (SifenException e) {
             log.error("Error SIFEN al consultar lote {}: {}", nroLote, e.getMessage(), e);
@@ -318,8 +415,9 @@ public class InvoiceService {
     public ConsultaDEResponse consultarDE(String cdc) {
         try {
             log.info("Consultando DE con CDC: {}", cdc);
-            Sifen.setSifenConfig(sifenConfigFactory.getConfigForCurrentTenant());
-            RespuestaConsultaDE respuesta = Sifen.consultaDE(cdc);
+            SifenConfig config = sifenConfigFactory.getConfigForCurrentTenant();
+            RespuestaConsultaDE respuesta = sifenConfigFactory.withSifenConfig(config,
+                    () -> Sifen.consultaDE(cdc));
             return buildConsultaDEResponse(cdc, respuesta);
         } catch (SifenException e) {
             log.error("Error SIFEN al consultar DE {}: {}", cdc, e.getMessage(), e);
@@ -336,8 +434,9 @@ public class InvoiceService {
             String rucSinDV = ruc.contains("-") ? ruc.split("-")[0] : ruc;
             log.info("Consultando RUC: {}", rucSinDV);
 
-            Sifen.setSifenConfig(sifenConfigFactory.getConfigForCurrentTenant());
-            RespuestaConsultaRUC respuesta = Sifen.consultaRUC(rucSinDV);
+            SifenConfig config = sifenConfigFactory.getConfigForCurrentTenant();
+            RespuestaConsultaRUC respuesta = sifenConfigFactory.withSifenConfig(config,
+                    () -> Sifen.consultaRUC(rucSinDV));
             return buildConsultaRucResponse(ruc, respuesta);
         } catch (SifenException e) {
             log.error("Error SIFEN al consultar RUC {}: {}", ruc, e.getMessage(), e);
@@ -352,7 +451,7 @@ public class InvoiceService {
         try {
             log.info("Enviando evento tipo {} para CDC: {}", request.getTipoEvento(), request.getCdc());
 
-            Sifen.setSifenConfig(sifenConfigFactory.getConfigForCurrentTenant());
+            SifenConfig sifenConfig = sifenConfigFactory.getConfigForCurrentTenant();
 
             EventosDE eventosDE = new EventosDE();
             TgGroupTiEvt grupo = new TgGroupTiEvt();
@@ -451,7 +550,8 @@ public class InvoiceService {
 
             eventosDE.setrGesEveList(List.of(gesEve));
 
-            RespuestaRecepcionEvento respuesta = Sifen.recepcionEvento(eventosDE);
+            RespuestaRecepcionEvento respuesta = sifenConfigFactory.withSifenConfig(sifenConfig,
+                    () -> Sifen.recepcionEvento(eventosDE));
             return buildEventoResponse(request.getCdc(), respuesta);
 
         } catch (SifenException e) {
@@ -890,7 +990,13 @@ public class InvoiceService {
     }
 
     private void validarReglasReceptor(EmitirFacturaRequest request) {
-        if (request == null || request.getData() == null || request.getData().getCliente() == null) {
+        if (request == null || request.getData() == null) {
+            return;
+        }
+
+        validarItemsDocumento(request.getData().getItems());
+
+        if (request.getData().getCliente() == null) {
             return;
         }
 
@@ -909,6 +1015,13 @@ public class InvoiceService {
                 throw new IllegalArgumentException(
                         "Factura innominada no permitida para montos >= 60.000.000 Gs (regla SIFEN 1321)");
             }
+        }
+    }
+
+    private void validarItemsDocumento(List<ItemDTO> items) {
+        if (items == null || items.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "El documento debe incluir al menos un item en data.items.");
         }
     }
 
@@ -941,7 +1054,9 @@ public class InvoiceService {
     }
 
     private ConsultaRucResponse buildConsultaRucResponse(String ruc, RespuestaConsultaRUC respuesta) {
-        ConsultaRucResponse.ConsultaRucResponseBuilder builder = ConsultaRucResponse.builder().ruc(ruc);
+        String rucSolo = ruc.contains("-") ? ruc.split("-")[0] : ruc;
+        String dvCalculado = SifenUtil.generateDv(rucSolo);
+        ConsultaRucResponse.ConsultaRucResponseBuilder builder = ConsultaRucResponse.builder().ruc(rucSolo).dv(dvCalculado);
         if (respuesta != null) {
             if (esRespuestaHtml(respuesta.getRespuestaBruta())) {
                 builder.estado("ERROR_CONEXION").codigoEstado("CONN_ERR").descripcionEstado(MSG_ERROR_CONEXION);
@@ -954,7 +1069,6 @@ public class InvoiceService {
                     builder.razonSocial(respuesta.getxContRUC().getdRazCons());
                 }
             }
-            builder.respuestaSifen(buildRespuestaSifenDTO(respuesta));
         }
         return builder.build();
     }
@@ -1092,6 +1206,9 @@ public class InvoiceService {
     /**
      * Mapea códigos de estado SIFEN de consulta DE a estados del documento local.
      * Usado por consultas CDC individuales (no lotes).
+     * Ver Manual Técnico SIFEN v150:
+     *   0420 = Documento Aprobado (consultaDE)
+     *   0422 = Documento No Existe en SIFEN o ha sido Rechazado (consultaDE)
      */
     String resolverEstadoDocumento(String codigoEstado) {
         if (codigoEstado == null) return "DESCONOCIDO";
@@ -1099,8 +1216,8 @@ public class InvoiceService {
             case "0260": return "APROBADO";
             case "0261": return "APROBADO_CON_OBSERVACION";
             case "0262": return "RECHAZADO";
-            case "0422": return "APROBADO";      // Consulta CDC: aprobado
-            case "0420": return "RECHAZADO";     // Consulta CDC: rechazado
+            case "0420": return "APROBADO";      // consultaDE: Documento Aprobado
+            case "0422": return "RECHAZADO";     // consultaDE: No Existe o Rechazado
             default: return "DESCONOCIDO";
         }
     }
@@ -1179,12 +1296,8 @@ public class InvoiceService {
             throw new IllegalStateException("No hay tenant configurado para la request actual");
         }
 
-        ElectronicDocument doc = electronicDocumentRepository.findByCdc(cdc)
+        ElectronicDocument doc = electronicDocumentRepository.findByCompanyIdAndCdc(companyId, cdc)
                 .orElseThrow(() -> new IllegalArgumentException("No se encontró documento con CDC: " + cdc));
-
-        if (!companyId.equals(doc.getCompanyId())) {
-            throw new IllegalArgumentException("El CDC no pertenece a la empresa autenticada");
-        }
 
         return invoiceEmailService.sendApprovedEmail(doc);
     }

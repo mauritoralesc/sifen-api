@@ -52,3 +52,4 @@ logging:
   level:
     com.ratones: DEBUG
     com.roshka.sifen: DEBUG
+    com.roshka.sifen.internal.request.BaseRequest: WARN

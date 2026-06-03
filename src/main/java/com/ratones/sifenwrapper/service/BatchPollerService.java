@@ -72,8 +72,8 @@ public class BatchPollerService {
 
         try {
             SifenConfig config = sifenConfigFactory.getConfigForCompany(companyId);
-            Sifen.setSifenConfig(config);
-            RespuestaConsultaLoteDE respuesta = Sifen.consultaLoteDE(nroLote);
+            RespuestaConsultaLoteDE respuesta = sifenConfigFactory.withSifenConfig(config,
+                    () -> Sifen.consultaLoteDE(nroLote));
 
             if (respuesta == null) {
                 log.warn("[BATCH-POLL] Respuesta nula para lote {}", nroLote);
@@ -188,11 +188,11 @@ public class BatchPollerService {
     private void consultarPorCdcIndividual(List<ElectronicDocument> docs, Long companyId) {
         try {
             SifenConfig config = sifenConfigFactory.getConfigForCompany(companyId);
-            Sifen.setSifenConfig(config);
 
             for (ElectronicDocument doc : docs) {
                 try {
-                    RespuestaConsultaDE respuesta = Sifen.consultaDE(doc.getCdc());
+                    RespuestaConsultaDE respuesta = sifenConfigFactory.withSifenConfig(config,
+                            () -> Sifen.consultaDE(doc.getCdc()));
                     if (respuesta != null && respuesta.getdCodRes() != null) {
                         String nuevoEstado = invoiceService.resolverEstadoDocumento(respuesta.getdCodRes());
                         if (!"DESCONOCIDO".equals(nuevoEstado)) {

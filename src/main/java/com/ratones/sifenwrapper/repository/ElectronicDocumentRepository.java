@@ -15,6 +15,8 @@ public interface ElectronicDocumentRepository extends JpaRepository<ElectronicDo
 
     Optional<ElectronicDocument> findByCdc(String cdc);
 
+    Optional<ElectronicDocument> findByCompanyIdAndCdc(Long companyId, String cdc);
+
     List<ElectronicDocument> findByNroLote(String nroLote);
 
     List<ElectronicDocument> findByCompanyIdAndEstado(Long companyId, String estado);

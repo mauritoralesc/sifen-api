@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratones.sifenwrapper.config.ResendProperties;
 import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
+import com.ratones.sifenwrapper.dto.request.KudeRequest;
 import com.ratones.sifenwrapper.dto.response.EmisionDEResponse;
 import com.ratones.sifenwrapper.entity.ElectronicDocument;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.Base64;
 import java.util.List;
 
 @Slf4j
@@ -26,6 +28,7 @@ public class InvoiceEmailService {
     private final ObjectMapper objectMapper;
     private final ResendProperties resendProperties;
     private final RestClient.Builder restClientBuilder;
+    private final KudeService kudeService;
 
     public EmailDispatchResult sendApprovedEmail(ElectronicDocument doc) {
         if (doc == null) {
@@ -56,7 +59,9 @@ public class InvoiceEmailService {
                 doc.getQrUrl());
         String text = buildTextBody(doc.getCdc(), doc.getEstado(), doc.getSifenCodigo(), doc.getSifenMensaje(), doc.getQrUrl());
 
-        return sendEmail(toEmail, subject, html, text);
+        byte[] kude = generarKudeSilencioso(root, doc.getCdc(), doc.getQrUrl(), doc.getEstado(),
+                doc.getSifenCodigo(), doc.getSifenMensaje());
+        return sendEmail(toEmail, subject, html, text, kude, "kude-" + doc.getCdc() + ".pdf");
     }
 
     public EmailDispatchResult sendApprovedEmailFromEmission(EmitirFacturaRequest request,
@@ -85,10 +90,49 @@ public class InvoiceEmailService {
         String text = buildTextBody(response.getCdc(), response.getEstado(), response.getCodigoEstado(),
                 response.getDescripcionEstado(), response.getQrUrl());
 
-        return sendEmail(toEmail, subject, html, text);
+        byte[] kude = generarKudeSilenciosoDesdeRequest(request, response);
+        return sendEmail(toEmail, subject, html, text, kude, "kude-" + response.getCdc() + ".pdf");
     }
 
-    private EmailDispatchResult sendEmail(String toEmail, String subject, String html, String text) {
+    private byte[] generarKudeSilencioso(JsonNode root, String cdc, String qrUrl,
+                                          String estado, String codigoEstado, String descripcionEstado) {
+        try {
+            EmitirFacturaRequest req = objectMapper.treeToValue(root, EmitirFacturaRequest.class);
+            KudeRequest kudeReq = new KudeRequest();
+            kudeReq.setParams(req.getParams());
+            kudeReq.setData(req.getData());
+            kudeReq.setCdc(cdc);
+            kudeReq.setQrUrl(qrUrl);
+            kudeReq.setEstado(estado);
+            kudeReq.setCodigoEstado(codigoEstado);
+            kudeReq.setDescripcionEstado(descripcionEstado);
+            return kudeService.generarKude(kudeReq);
+        } catch (Exception e) {
+            log.warn("[EMAIL] No se pudo generar KUDE para adjuntar (cdc={}): {}", cdc, e.getMessage());
+            return null;
+        }
+    }
+
+    private byte[] generarKudeSilenciosoDesdeRequest(EmitirFacturaRequest request,
+                                                      EmisionDEResponse response) {
+        try {
+            KudeRequest kudeReq = new KudeRequest();
+            kudeReq.setParams(request.getParams());
+            kudeReq.setData(request.getData());
+            kudeReq.setCdc(response.getCdc());
+            kudeReq.setQrUrl(response.getQrUrl());
+            kudeReq.setEstado(response.getEstado());
+            kudeReq.setCodigoEstado(response.getCodigoEstado());
+            kudeReq.setDescripcionEstado(response.getDescripcionEstado());
+            return kudeService.generarKude(kudeReq);
+        } catch (Exception e) {
+            log.warn("[EMAIL] No se pudo generar KUDE para adjuntar (cdc={}): {}", response.getCdc(), e.getMessage());
+            return null;
+        }
+    }
+
+    private EmailDispatchResult sendEmail(String toEmail, String subject, String html, String text,
+                                          byte[] attachmentBytes, String attachmentFilename) {
         if (resendProperties.getApiKey() == null || resendProperties.getApiKey().isBlank()) {
             log.warn("[EMAIL] RESEND_API_KEY no configurada. Se omite envío a {}", toEmail);
             return EmailDispatchResult.notSent("RESEND_API_KEY no configurada");
@@ -97,12 +141,21 @@ public class InvoiceEmailService {
         String from = buildFrom();
         RestClient client = restClientBuilder.baseUrl(RESEND_BASE_URL).build();
 
+        List<ResendAttachment> attachments = null;
+        if (attachmentBytes != null && attachmentFilename != null) {
+            attachments = List.of(new ResendAttachment(
+                    attachmentFilename,
+                    Base64.getEncoder().encodeToString(attachmentBytes)
+            ));
+        }
+
         ResendSendEmailRequest payload = new ResendSendEmailRequest(
                 from,
                 List.of(toEmail),
                 subject,
                 html,
-                text
+                text,
+                attachments
         );
 
         try {
@@ -226,7 +279,11 @@ public class InvoiceEmailService {
                                           List<String> to,
                                           String subject,
                                           String html,
-                                          String text) {
+                                          String text,
+                                          List<ResendAttachment> attachments) {
+    }
+
+    private record ResendAttachment(String filename, String content) {
     }
 
     private record ResendSendEmailResponse(String id) {

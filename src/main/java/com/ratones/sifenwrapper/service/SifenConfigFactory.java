@@ -5,7 +5,9 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.ratones.sifenwrapper.entity.Company;
 import com.ratones.sifenwrapper.repository.CompanyRepository;
 import com.ratones.sifenwrapper.security.TenantContext;
+import com.roshka.sifen.Sifen;
 import com.roshka.sifen.core.SifenConfig;
+import com.roshka.sifen.core.exceptions.SifenException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +16,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 @Service
@@ -26,6 +29,42 @@ public class SifenConfigFactory {
             .maximumSize(100)
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
+
+    /**
+     * Lock global que serializa todas las operaciones que involucren Sifen.setSifenConfig().
+     * La librería rshk-jsifenlib mantiene el config en un campo estático compartido,
+     * por lo que no es thread-safe en entornos multi-tenant concurrentes.
+     */
+    private static final ReentrantLock SIFEN_GLOBAL_LOCK = new ReentrantLock();
+
+    /**
+     * Interfaz funcional para operaciones SIFEN que pueden lanzar SifenException.
+     */
+    @FunctionalInterface
+    public interface SifenCallable<T> {
+        T call() throws Exception;
+    }
+
+    /**
+     * Establece el config de SIFEN y ejecuta la operación dentro de un lock global.
+     * Garantiza que no haya race conditions entre empresas con diferente config
+     * (ej. PROD vs DEV con el mismo RUC).
+     */
+    public <T> T withSifenConfig(SifenConfig config, SifenCallable<T> operation) throws SifenException {
+        SIFEN_GLOBAL_LOCK.lock();
+        try {
+            Sifen.setSifenConfig(config);
+            return operation.call();
+        } catch (SifenException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Error en operación SIFEN", e);
+        } finally {
+            SIFEN_GLOBAL_LOCK.unlock();
+        }
+    }
 
     public SifenConfigFactory(CompanyRepository companyRepository, EncryptionService encryptionService) {
         this.companyRepository = companyRepository;

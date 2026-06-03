@@ -34,7 +34,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<SifenApiResponse<Void>> handleBadRequest(HttpMessageNotReadableException ex) {
-        log.warn("Request body no legible: {}", ex.getMessage());
+        Throwable cause = ex.getMostSpecificCause();
+        String detalleLog = cause != null ? cause.getClass().getSimpleName() : ex.getClass().getSimpleName();
+        log.warn("Request body no legible: {}", detalleLog);
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(SifenApiResponse.error(

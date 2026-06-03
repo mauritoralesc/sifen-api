@@ -1,7 +1,9 @@
 package com.ratones.sifenwrapper.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.ratones.sifenwrapper.dto.response.AuditLogDTO;
 import com.ratones.sifenwrapper.dto.response.ElectronicDocumentLogDTO;
 import com.ratones.sifenwrapper.dto.response.PageResponse;
@@ -109,10 +111,23 @@ public class LogService {
             return null;
         }
         try {
-            return objectMapper.readTree(jsonStr);
+            JsonNode root = objectMapper.readTree(jsonStr);
+            redactLogoBase64(root);
+            return root;
         } catch (JsonProcessingException e) {
             log.warn("Error parsing JSON for log view", e);
             return jsonStr;
+        }
+    }
+
+    private void redactLogoBase64(JsonNode root) {
+        if (!(root instanceof ObjectNode rootObject)) {
+            return;
+        }
+
+        JsonNode params = rootObject.get("params");
+        if (params instanceof ObjectNode paramsObject) {
+            paramsObject.remove("logoBase64");
         }
     }
 }

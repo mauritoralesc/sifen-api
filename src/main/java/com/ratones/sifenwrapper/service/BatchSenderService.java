@@ -78,7 +78,6 @@ public class BatchSenderService {
                     companyId, docs.size(), docs.get(0).getTipoDocumento());
 
             SifenConfig config = sifenConfigFactory.getConfigForCompany(companyId);
-            Sifen.setSifenConfig(config);
 
             // Re-crear DocumentoElectronico desde los request almacenados
             List<DocumentoElectronico> documentos = new ArrayList<>();
@@ -101,7 +100,9 @@ public class BatchSenderService {
 
             if (documentos.isEmpty()) return;
 
-            RespuestaRecepcionLoteDE respuesta = Sifen.recepcionLoteDE(documentos);
+            final List<DocumentoElectronico> docsFinal = documentos;
+            RespuestaRecepcionLoteDE respuesta = sifenConfigFactory.withSifenConfig(config,
+                    () -> Sifen.recepcionLoteDE(docsFinal));
 
             if (respuesta == null) {
                 log.error("[BATCH-SEND] Respuesta nula de SIFEN para lote empresa={}", companyId);
