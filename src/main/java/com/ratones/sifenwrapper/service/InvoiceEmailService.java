@@ -15,8 +15,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -43,8 +47,8 @@ public class InvoiceEmailService {
             return EmailDispatchResult.notSent("No se pudo leer requestData para obtener email del cliente");
         }
 
-        String toEmail = text(root.path("data").path("cliente").path("email"));
-        if (toEmail == null || toEmail.isBlank()) {
+        EmailRecipients recipients = resolveRecipientsFromRoot(root);
+        if (recipients.toEmail() == null) {
             return EmailDispatchResult.notSent("El cliente no tiene email en el request");
         }
 
@@ -61,7 +65,8 @@ public class InvoiceEmailService {
 
         byte[] kude = generarKudeSilencioso(root, doc.getCdc(), doc.getQrUrl(), doc.getEstado(),
                 doc.getSifenCodigo(), doc.getSifenMensaje());
-        return sendEmail(toEmail, subject, html, text, kude, "kude-" + doc.getCdc() + ".pdf");
+        return sendEmail(recipients.toEmail(), recipients.ccEmails(), subject, html, text, kude,
+                "kude-" + doc.getCdc() + ".pdf");
     }
 
     public EmailDispatchResult sendApprovedEmailFromEmission(EmitirFacturaRequest request,
@@ -73,8 +78,8 @@ public class InvoiceEmailService {
             return EmailDispatchResult.notSent("El documento no está aprobado");
         }
 
-        String toEmail = request.getData().getCliente().getEmail();
-        if (toEmail == null || toEmail.isBlank()) {
+        EmailRecipients recipients = resolveRecipientsFromRequest(request);
+        if (recipients.toEmail() == null) {
             return EmailDispatchResult.notSent("El cliente no tiene email en el request");
         }
 
@@ -91,7 +96,8 @@ public class InvoiceEmailService {
                 response.getDescripcionEstado(), response.getQrUrl());
 
         byte[] kude = generarKudeSilenciosoDesdeRequest(request, response);
-        return sendEmail(toEmail, subject, html, text, kude, "kude-" + response.getCdc() + ".pdf");
+        return sendEmail(recipients.toEmail(), recipients.ccEmails(), subject, html, text, kude,
+                "kude-" + response.getCdc() + ".pdf");
     }
 
     private byte[] generarKudeSilencioso(JsonNode root, String cdc, String qrUrl,
@@ -131,10 +137,11 @@ public class InvoiceEmailService {
         }
     }
 
-    private EmailDispatchResult sendEmail(String toEmail, String subject, String html, String text,
-                                          byte[] attachmentBytes, String attachmentFilename) {
+    private EmailDispatchResult sendEmail(String toEmail, List<String> ccEmails, String subject, String html,
+                                          String text, byte[] attachmentBytes, String attachmentFilename) {
         if (resendProperties.getApiKey() == null || resendProperties.getApiKey().isBlank()) {
-            log.warn("[EMAIL] RESEND_API_KEY no configurada. Se omite envío a {}", toEmail);
+            log.warn("[EMAIL] RESEND_API_KEY no configurada. Se omite envío a {} (cc={})", toEmail,
+                    ccEmails == null || ccEmails.isEmpty() ? "-" : String.join(",", ccEmails));
             return EmailDispatchResult.notSent("RESEND_API_KEY no configurada");
         }
 
@@ -152,6 +159,7 @@ public class InvoiceEmailService {
         ResendSendEmailRequest payload = new ResendSendEmailRequest(
                 from,
                 List.of(toEmail),
+                (ccEmails == null || ccEmails.isEmpty()) ? null : ccEmails,
                 subject,
                 html,
                 text,
@@ -168,8 +176,9 @@ public class InvoiceEmailService {
                     .body(ResendSendEmailResponse.class);
 
             String resendId = resendResponse != null ? resendResponse.id() : null;
-            log.info("[EMAIL] Factura enviada por email a {} (resendId={})", toEmail, resendId);
-            return EmailDispatchResult.sent(toEmail, resendId);
+            log.info("[EMAIL] Factura enviada por email a {} (cc={}) (resendId={})",
+                    toEmail, ccEmails == null || ccEmails.isEmpty() ? "-" : String.join(",", ccEmails), resendId);
+            return EmailDispatchResult.sent(toEmail, ccEmails, resendId);
         } catch (RestClientResponseException ex) {
             log.error("[EMAIL] Error Resend (status={}): {}", ex.getStatusCode(), ex.getResponseBodyAsString());
             return EmailDispatchResult.notSent("Resend rechazó la solicitud: " + ex.getStatusCode());
@@ -207,6 +216,69 @@ public class InvoiceEmailService {
 
     private String text(JsonNode node) {
         return (node == null || node.isNull()) ? null : node.asText(null);
+    }
+
+    private EmailRecipients resolveRecipientsFromRoot(JsonNode root) {
+        String toEmail = text(root.path("data").path("cliente").path("email"));
+        JsonNode ccNode = root.path("data").path("cliente").path("emailCc");
+        List<String> ccEmails = extractCcEmails(ccNode);
+        return resolveRecipients(toEmail, ccEmails);
+    }
+
+    private EmailRecipients resolveRecipientsFromRequest(EmitirFacturaRequest request) {
+        String toEmail = request.getData().getCliente().getEmail();
+        List<String> ccEmails = request.getData().getCliente().getEmailCc();
+        return resolveRecipients(toEmail, ccEmails);
+    }
+
+    private EmailRecipients resolveRecipients(String toEmail, List<String> ccEmails) {
+        String normalizedTo = normalizeEmail(toEmail);
+        if (normalizedTo == null) {
+            return new EmailRecipients(null, List.of());
+        }
+        List<String> normalizedCc = normalizeCcEmails(ccEmails, normalizedTo);
+        return new EmailRecipients(normalizedTo, normalizedCc);
+    }
+
+    private List<String> extractCcEmails(JsonNode ccNode) {
+        if (ccNode == null || ccNode.isNull() || ccNode.isMissingNode()) {
+            return List.of();
+        }
+        List<String> emails = new ArrayList<>();
+        if (ccNode.isArray()) {
+            for (JsonNode child : ccNode) {
+                if (child != null && !child.isNull()) {
+                    emails.add(child.asText(null));
+                }
+            }
+            return emails;
+        }
+        if (ccNode.isTextual()) {
+            emails.add(ccNode.asText(null));
+        }
+        return emails;
+    }
+
+    private List<String> normalizeCcEmails(List<String> ccEmails, String toEmail) {
+        if (ccEmails == null || ccEmails.isEmpty()) {
+            return List.of();
+        }
+        String toKey = toEmail.toLowerCase(Locale.ROOT);
+        Map<String, String> dedup = new LinkedHashMap<>();
+        for (String candidate : ccEmails) {
+            String normalized = normalizeEmail(candidate);
+            if (normalized == null) continue;
+            String key = normalized.toLowerCase(Locale.ROOT);
+            if (toKey.equals(key)) continue;
+            dedup.putIfAbsent(key, normalized);
+        }
+        return List.copyOf(dedup.values());
+    }
+
+    private String normalizeEmail(String email) {
+        if (email == null) return null;
+        String trimmed = email.trim();
+        return trimmed.isBlank() ? null : trimmed;
     }
 
     private String buildHtmlBody(String cliente,
@@ -265,22 +337,26 @@ public class InvoiceEmailService {
                 .replace("'", "&#39;");
     }
 
-    public record EmailDispatchResult(boolean sent, String email, String reason, String resendId) {
-        public static EmailDispatchResult sent(String email, String resendId) {
-            return new EmailDispatchResult(true, email, null, resendId);
+    public record EmailDispatchResult(boolean sent, String email, List<String> cc, String reason, String resendId) {
+        public static EmailDispatchResult sent(String email, List<String> cc, String resendId) {
+            return new EmailDispatchResult(true, email, cc == null ? List.of() : List.copyOf(cc), null, resendId);
         }
 
         public static EmailDispatchResult notSent(String reason) {
-            return new EmailDispatchResult(false, null, reason, null);
+            return new EmailDispatchResult(false, null, List.of(), reason, null);
         }
     }
 
     private record ResendSendEmailRequest(String from,
                                           List<String> to,
+                                          List<String> cc,
                                           String subject,
                                           String html,
                                           String text,
                                           List<ResendAttachment> attachments) {
+    }
+
+    private record EmailRecipients(String toEmail, List<String> ccEmails) {
     }
 
     private record ResendAttachment(String filename, String content) {

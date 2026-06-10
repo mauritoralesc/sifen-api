@@ -75,6 +75,7 @@ X-API-Key: sw_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     "cdc": "01005324815001002000003722026050510000000373",
     "sent": "true",
     "email": "cliente@empresa.com",
+    "cc": "contabilidad@tuempresa.com,tesoreria@tuempresa.com",
     "reason": "",
     "resendId": "6f2b1c3e-aaaa-bbbb-cccc-1234567890ab"
   }
@@ -93,6 +94,7 @@ El endpoint **siempre responde `200`**. Cuando el envío no fue posible, `sent` 
     "cdc": "01005324815001002000003722026050510000000373",
     "sent": "false",
     "email": "",
+    "cc": "",
     "reason": "El documento no está aprobado",
     "resendId": ""
   }
@@ -155,6 +157,7 @@ El correo que recibe el cliente incluye:
 - **Asunto:** `Factura aprobada - CDC <cdc>`
 - **Remitente:** Configurado en el servidor (`fromName <fromEmail>`, ej: `SYNCTEMA <no-reply@synctema.com>`)
 - **Destinatario:** `data.cliente.email` del request original de emisión
+- **CC (opcional):** `data.cliente.emailCc` del request original (string separado por comas en la respuesta de reenvío)
 - **Adjunto:** KUDE en formato PDF (`kude-<cdc>.pdf`)
 - **Cuerpo HTML y texto plano** con CDC, estado, código SIFEN y URL del QR
 
@@ -172,13 +175,17 @@ Para que el envío funcione, el request de emisión original debe incluir el ema
     "cliente": {
       "ruc": "80012345-1",
       "razonSocial": "Empresa Cliente S.A.",
-      "email": "facturacion@empresa.com"
+      "email": "facturacion@empresa.com",
+      "emailCc": [
+        "contabilidad@tuempresa.com",
+        "tesoreria@tuempresa.com"
+      ]
     }
   }
 }
 ```
 
-Si `email` se omite o está vacío, **ni el envío automático ni el reenvío funcionarán**. El campo no es obligatorio para SIFEN, pero sí para la funcionalidad de correo.
+Si `email` se omite o está vacío, **ni el envío automático ni el reenvío funcionarán**. El campo no es obligatorio para SIFEN, pero sí para la funcionalidad de correo. `emailCc` es opcional.
 
 ---
 

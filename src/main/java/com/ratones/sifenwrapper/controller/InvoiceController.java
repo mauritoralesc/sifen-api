@@ -124,6 +124,7 @@ public class InvoiceController {
                 "cdc", cdc,
                 "sent", String.valueOf(result.sent()),
                 "email", result.email() != null ? result.email() : "",
+                "cc", result.cc() != null && !result.cc().isEmpty() ? String.join(",", result.cc()) : "",
                 "reason", result.reason() != null ? result.reason() : "",
                 "resendId", result.resendId() != null ? result.resendId() : ""
         );

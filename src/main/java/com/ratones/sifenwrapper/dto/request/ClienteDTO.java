@@ -1,6 +1,7 @@
 package com.ratones.sifenwrapper.dto.request;
 
 import lombok.Data;
+import java.util.List;
 
 @Data
 public class ClienteDTO {
@@ -30,5 +31,6 @@ public class ClienteDTO {
     private int tipoContribuyente;
     private String telefono;
     private String email;
+    private List<String> emailCc;
     private String codigo;
 }
