@@ -11,6 +11,11 @@ public class SifenServiceException extends RuntimeException {
         this.cause = cause;
     }
 
+    public SifenServiceException(String message) {
+        super(message);
+        this.cause = null;
+    }
+
     public SifenException getSifenException() {
         return cause;
     }

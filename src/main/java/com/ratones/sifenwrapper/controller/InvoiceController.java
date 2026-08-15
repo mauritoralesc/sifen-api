@@ -4,16 +4,22 @@ import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
 import com.ratones.sifenwrapper.dto.request.EventoRequest;
 import com.ratones.sifenwrapper.dto.request.KudeRequest;
 import com.ratones.sifenwrapper.dto.response.*;
+import com.ratones.sifenwrapper.service.EventoService;
 import com.ratones.sifenwrapper.service.InvoiceEmailService;
 import com.ratones.sifenwrapper.service.InvoiceService;
 import com.ratones.sifenwrapper.service.KudeService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -21,13 +27,18 @@ import java.util.Map;
  * Controlador REST para operaciones con Documentos Electrónicos SIFEN.
  *
  * Endpoints disponibles:
- *  POST /invoices/emit               → Recepción DE Síncrona
- *  POST /invoices/emit/batch         → Recepción Lote DE Asíncrona
- *  POST /invoices/kude               → Generar KUDE (PDF) de un DE
- *  GET  /invoices/{cdc}              → Consulta DE por CDC
- *  GET  /invoices/batch/{nroLote}    → Consulta Estado Lote
- *  GET  /invoices/ruc/{ruc}          → Consulta RUC
- *  POST /invoices/{cdc}/events       → Recepción Evento (cancelación, etc.)
+ *  POST /invoices/emit                    → Recepción DE Síncrona
+ *  POST /invoices/emit/batch              → Recepción Lote DE Asíncrona
+ *  POST /invoices/kude                    → Generar KUDE (PDF) de un DE
+ *  GET  /invoices/{cdc}                   → Consulta DE por CDC
+ *  GET  /invoices/batch/{nroLote}         → Consulta Estado Lote
+ *  GET  /invoices/ruc/{ruc}               → Consulta RUC
+ *  POST /invoices/events                  → Recepción Evento (cancelación, inutilización, etc.)
+ *  GET  /invoices/{cdc}/events            → Historial de eventos de un CDC
+ *  GET  /invoices/events                  → Listado paginado de eventos (filtros tipo/estado/fecha)
+ *  POST /invoices/events/{id}/reconcile   → Reconciliación bajo demanda de un evento INDETERMINADO
+ *  POST /invoices/{cdc}/resend            → Reenvía un DE RECHAZADO/ERROR con el mismo CDC
+ *  POST /invoices/resend-rejected         → Reenvía todos los RECHAZADO por código SIFEN
  */
 @Slf4j
 @RestController
@@ -36,6 +47,7 @@ import java.util.Map;
 public class InvoiceController {
 
     private final InvoiceService invoiceService;
+    private final EventoService eventoService;
     private final KudeService kudeService;
 
     /**
@@ -137,6 +149,47 @@ public class InvoiceController {
     }
 
     /**
+     * Reenvía un Documento Electrónico RECHAZADO o ERROR a SIFEN reutilizando el
+     * mismo CDC (permitido por el Manual Técnico SIFEN mientras el ajuste no
+     * modifique los campos que componen el CDC). El documento vuelve a estado
+     * PREPARADO y el scheduler de envío lo re-firma y reenvía en el próximo ciclo.
+     *
+     * El body es opcional:
+     *  - Sin body: reintenta con los datos ya almacenados (ej. código 1004, donde
+     *    el problema es la hora de firma, no los datos del documento).
+     *  - Con body (EmitirFacturaRequest): reemplaza los datos almacenados por el
+     *    payload corregido; se exige que el CDC recalculado sea idéntico al original.
+     *
+     * ?force=true omite el bloqueo por clasificación NO_REENVIABLE (ver GET
+     * /invoices/{cdc}/status → clasificacionReenvio) — el guard de igualdad de CDC
+     * sigue aplicando siempre, sin excepción.
+     */
+    @PostMapping("/{cdc}/resend")
+    public ResponseEntity<SifenApiResponse<DocumentStatusResponse>> reenviarDocumento(
+            @PathVariable String cdc,
+            @RequestParam(defaultValue = "false") boolean force,
+            @RequestBody(required = false) EmitirFacturaRequest payload) {
+
+        log.info("POST /invoices/{}/resend?force={}", cdc, force);
+        DocumentStatusResponse response = invoiceService.reenviarDocumento(cdc, payload, force);
+        return ResponseEntity.ok(SifenApiResponse.ok(response,
+                "Documento reencolado para reenvío con el mismo CDC"));
+    }
+
+    /**
+     * Reenvía todos los documentos RECHAZADO de la empresa cuyo código de error SIFEN
+     * coincida (por defecto 1004 — "La fecha y hora de la firma digital es adelantada").
+     */
+    @PostMapping("/resend-rejected")
+    public ResponseEntity<SifenApiResponse<List<ResendResultDTO>>> reenviarRechazados(
+            @RequestParam(required = false) String codigo) {
+
+        log.info("POST /invoices/resend-rejected?codigo={}", codigo);
+        List<ResendResultDTO> response = invoiceService.reenviarRechazados(codigo);
+        return ResponseEntity.ok(SifenApiResponse.ok(response, "Reenvío de documentos rechazados procesado"));
+    }
+
+    /**
      * Consulta el estado de un Documento Electrónico por su CDC
      * (Código de Control del Documento Electrónico, 44 caracteres).
      * Consulta directamente a SIFEN (no usa la base local).
@@ -188,11 +241,57 @@ public class InvoiceController {
      */
     @PostMapping("/events")
     public ResponseEntity<SifenApiResponse<RecepcionEventoResponse>> enviarEvento(
-            @RequestBody EventoRequest request) {
+            @Valid @RequestBody EventoRequest request) {
 
         log.info("POST /invoices/events - tipoEvento={}, cdc={}", request.getTipoEvento(), request.getCdc());
-        RecepcionEventoResponse response = invoiceService.enviarEvento(request);
+        RecepcionEventoResponse response = eventoService.enviarEvento(request);
         return ResponseEntity.ok(SifenApiResponse.ok(response, "Evento enviado correctamente"));
+    }
+
+    /**
+     * Historial de eventos registrados para un CDC (propios, si fue emitido por esta
+     * empresa; o eventos de receptor registrados por esta empresa sobre un CDC ajeno).
+     */
+    @GetMapping("/{cdc}/events")
+    public ResponseEntity<SifenApiResponse<List<EventoResumenDTO>>> listarEventosPorCdc(
+            @PathVariable String cdc) {
+
+        log.info("GET /invoices/{}/events", cdc);
+        List<EventoResumenDTO> eventos = eventoService.listarPorCdc(cdc);
+        return ResponseEntity.ok(SifenApiResponse.ok(eventos));
+    }
+
+    /**
+     * Listado paginado de eventos de la empresa autenticada, con filtros opcionales.
+     * Nota: coexiste sin ambigüedad con GET /invoices/{cdc} — Spring prioriza el
+     * segmento literal "events" sobre el template {cdc}, igual que ya ocurre con
+     * /invoices/prepare, /invoices/kude, /invoices/ruc/{ruc}, etc.
+     */
+    @GetMapping("/events")
+    public ResponseEntity<SifenApiResponse<PageResponse<EventoResumenDTO>>> listarEventos(
+            @RequestParam(required = false) Short tipoEvento,
+            @RequestParam(required = false) String estado,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+
+        log.info("GET /invoices/events - tipoEvento={}, estado={}, page={}, size={}", tipoEvento, estado, page, size);
+        Pageable pageable = PageRequest.of(page, size);
+        PageResponse<EventoResumenDTO> response = eventoService.listar(tipoEvento, estado, desde, hasta, pageable);
+        return ResponseEntity.ok(SifenApiResponse.ok(response));
+    }
+
+    /**
+     * Reconciliación bajo demanda de un evento (típicamente INDETERMINADO tras un
+     * timeout). Solo tipo 1 (cancelación) puede confirmarse vía consultaDE; el resto
+     * devuelve NO_CONCLUYENTE con guía para el ERP. Nunca reenvía automáticamente.
+     */
+    @PostMapping("/events/{id}/reconcile")
+    public ResponseEntity<SifenApiResponse<EventoResumenDTO>> reconciliarEvento(@PathVariable Long id) {
+        log.info("POST /invoices/events/{}/reconcile", id);
+        EventoResumenDTO response = eventoService.reconciliar(id);
+        return ResponseEntity.ok(SifenApiResponse.ok(response));
     }
 
     /**

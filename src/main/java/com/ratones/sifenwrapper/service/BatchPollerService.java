@@ -1,6 +1,7 @@
 package com.ratones.sifenwrapper.service;
 
 import com.ratones.sifenwrapper.config.BatchProperties;
+import com.ratones.sifenwrapper.dto.response.MensajeSifenDTO;
 import com.ratones.sifenwrapper.entity.ElectronicDocument;
 import com.ratones.sifenwrapper.repository.ElectronicDocumentRepository;
 import com.roshka.sifen.Sifen;
@@ -142,16 +143,17 @@ public class BatchPollerService {
             }
 
             String estadoSifen = resultado.getdEstRes(); // "Aprobado", "Rechazado", etc.
-            String nuevoEstado = mapearEstadoLote(estadoSifen);
+            String nuevoEstado = invoiceService.mapearEstadoLote(estadoSifen);
+            if ("DESCONOCIDO".equals(nuevoEstado)) {
+                log.warn("[BATCH-POLL] Estado SIFEN no reconocido para CDC {}: '{}' — no se actualiza el documento",
+                        doc.getCdc(), estadoSifen);
+                continue;
+            }
             String estadoAnterior = doc.getEstado();
 
-            doc.setEstado(nuevoEstado);
+            List<MensajeSifenDTO> mensajes = invoiceService.mapearMensajes(resultado.getgResProc());
+            invoiceService.registrarResultadoSifen(doc, nuevoEstado, mensajes, "consultaLoteDE");
             doc.setProcessedAt(ahora);
-
-            if (resultado.getgResProc() != null && !resultado.getgResProc().isEmpty()) {
-                doc.setSifenCodigo(resultado.getgResProc().get(0).getdCodRes());
-                doc.setSifenMensaje(resultado.getgResProc().get(0).getdMsgRes());
-            }
 
             documentRepository.save(doc);
             log.info("[STATUS-UPDATE] CDC: {} — {} → {}", doc.getCdc(), estadoAnterior, nuevoEstado);
@@ -197,9 +199,11 @@ public class BatchPollerService {
                         String nuevoEstado = invoiceService.resolverEstadoDocumento(respuesta.getdCodRes());
                         if (!"DESCONOCIDO".equals(nuevoEstado)) {
                             String estadoAnterior = doc.getEstado();
-                            doc.setEstado(nuevoEstado);
-                            doc.setSifenCodigo(respuesta.getdCodRes());
-                            doc.setSifenMensaje(respuesta.getdMsgRes());
+                            List<MensajeSifenDTO> mensajes = List.of(MensajeSifenDTO.builder()
+                                    .codigo(respuesta.getdCodRes())
+                                    .descripcion(respuesta.getdMsgRes())
+                                    .build());
+                            invoiceService.registrarResultadoSifen(doc, nuevoEstado, mensajes, "consultaDE");
                             doc.setProcessedAt(LocalDateTime.now());
                             documentRepository.save(doc);
                             log.info("[STATUS-UPDATE] CDC: {} — {} → {} (consulta individual)",
@@ -221,17 +225,6 @@ public class BatchPollerService {
             }
         } catch (Exception e) {
             log.error("[BATCH-POLL] Error obteniendo config empresa {}: {}", companyId, e.getMessage());
-        }
-    }
-
-    private String mapearEstadoLote(String estadoSifen) {
-        if (estadoSifen == null) return "DESCONOCIDO";
-        switch (estadoSifen.toLowerCase()) {
-            case "aprobado": return "APROBADO";
-            case "aprobado con observación":
-            case "aprobado con observacion": return "APROBADO_CON_OBSERVACION";
-            case "rechazado": return "RECHAZADO";
-            default: return "DESCONOCIDO";
         }
     }
 

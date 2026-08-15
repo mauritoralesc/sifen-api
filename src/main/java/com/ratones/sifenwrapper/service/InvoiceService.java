@@ -1,34 +1,35 @@
 package com.ratones.sifenwrapper.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.dao.DataIntegrityViolationException;
 import com.roshka.sifen.Sifen;
 import com.roshka.sifen.core.SifenConfig;
 import com.roshka.sifen.core.beans.DocumentoElectronico;
-import com.roshka.sifen.core.beans.EventosDE;
 import com.roshka.sifen.core.beans.response.*;
 import com.roshka.sifen.core.exceptions.SifenException;
 import com.roshka.sifen.core.fields.request.de.*;
-import com.roshka.sifen.core.fields.request.event.*;
 import com.roshka.sifen.core.fields.response.TgResProc;
 import com.roshka.sifen.core.fields.response.batch.TgResProcLote;
 import com.roshka.sifen.core.fields.response.de.TxContenDE;
-import com.roshka.sifen.core.fields.response.event.TgResProcEVe;
 import com.roshka.sifen.core.types.*;
 import com.roshka.sifen.internal.ctx.GenerationCtx;
 import com.roshka.sifen.internal.util.SifenUtil;
 import com.ratones.sifenwrapper.dto.request.ClienteDTO;
 import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
-import com.ratones.sifenwrapper.dto.request.EventoRequest;
 import com.ratones.sifenwrapper.dto.request.ItemDTO;
 import com.ratones.sifenwrapper.dto.request.KudeRequest;
 import com.ratones.sifenwrapper.dto.request.ParamsDTO;
 import com.ratones.sifenwrapper.dto.response.*;
 import com.ratones.sifenwrapper.dto.response.consulta.*;
 import com.ratones.sifenwrapper.entity.ElectronicDocument;
+import com.ratones.sifenwrapper.entity.SifenEvent;
 import com.ratones.sifenwrapper.mapper.SifenMapper;
 import com.ratones.sifenwrapper.repository.ElectronicDocumentRepository;
+import com.ratones.sifenwrapper.repository.SifenEventRepository;
 import com.ratones.sifenwrapper.security.TenantContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,12 +51,15 @@ public class InvoiceService {
 
     private static final ZoneId PY_ZONE = ZoneId.of("America/Asuncion");
     private static final BigDecimal MONTO_MAX_INNOMINADO = new BigDecimal("60000000");
+    private static final String DEFAULT_RESEND_SIFEN_CODIGO = "1004";
+    private static final List<String> ESTADOS_REENVIABLES = List.of("RECHAZADO", "ERROR");
 
     private final SifenConfigFactory sifenConfigFactory;
     private final CompanyService companyService;
     private final KudeService kudeService;
     private final InvoiceEmailService invoiceEmailService;
     private final ElectronicDocumentRepository electronicDocumentRepository;
+    private final SifenEventRepository sifenEventRepository;
     private final ObjectMapper objectMapper;
 
     // ─── Emisión DE (Recepción Síncrona) ──────────────────────────────────────
@@ -217,22 +221,26 @@ public class InvoiceService {
             if (refresh) {
                 try {
                     ConsultaDEResponse sifenResp = consultarDE(cdc);
-                    return DocumentStatusResponse.builder()
+                    return enriquecerConEventos(enriquecerConClasificacion(DocumentStatusResponse.builder()
                             .cdc(cdc)
                             .estado(sifenResp.getEstado())
                             .codigoEstado(sifenResp.getCodigoEstado())
                             .descripcionEstado(sifenResp.getDescripcionEstado())
-                            .qrUrl(sifenResp.getQrUrl())
-                            .build();
+                            .qrUrl(sifenResp.getQrUrl()),
+                            sifenResp.getEstado(), sifenResp.getCodigoEstado(),
+                            sifenResp.getDescripcionEstado(), null), cdc).build();
                 } catch (Exception e) {
                     log.warn("No se pudo consultar SIFEN para CDC {}: {}", cdc, e.getMessage());
                 }
             }
-            return DocumentStatusResponse.builder()
+            // Un CDC ajeno (emitido por otra empresa) no tiene ElectronicDocument local,
+            // pero esta empresa puede haber registrado eventos de receptor (tipos 3-6) sobre él.
+            return enriquecerConEventos(DocumentStatusResponse.builder()
                     .cdc(cdc)
                     .estado("NO_ENCONTRADO")
                     .descripcionEstado("No se encontró el documento con CDC: " + cdc)
-                    .build();
+                    .mensajes(List.of())
+                    .reenviable(false), cdc).build();
         }
 
         ElectronicDocument doc = optDoc.get();
@@ -271,6 +279,8 @@ public class InvoiceService {
                                 .createdAt(doc.getCreatedAt())
                                 .sentAt(doc.getSentAt())
                                 .processedAt(doc.getProcessedAt())
+                                .mensajes(List.of())
+                                .reenviable(false)
                                 .build();
                     }
 
@@ -281,37 +291,36 @@ public class InvoiceService {
                         java.util.List<TgResProcLote> resultados = respuestaLote.getgResProcLoteList();
                         if (resultados != null) {
                             for (TgResProcLote res : resultados) {
-                                if (cdc.equals(res.getId())
-                                        && res.getgResProc() != null
-                                        && !res.getgResProc().isEmpty()) {
-                                    TgResProc gResProc = res.getgResProc().get(0);
+                                if (!cdc.equals(res.getId())) {
+                                    continue;
+                                }
+                                // dEstRes ("Aprobado"/"Rechazado") es la fuente de verdad del estado,
+                                // independiente de si gResProc trae detalle (puede venir vacío).
+                                String nuevoEstado = mapearEstadoLote(res.getdEstRes());
+                                if (!"DESCONOCIDO".equals(nuevoEstado)) {
                                     String estadoAnterior = doc.getEstado();
-                                    String nuevoEstado = resolverEstadoDocumento(gResProc.getdCodRes());
-                                    if (!"DESCONOCIDO".equals(nuevoEstado)) {
-                                        doc.setEstado(nuevoEstado);
-                                        doc.setSifenCodigo(gResProc.getdCodRes());
-                                        doc.setSifenMensaje(gResProc.getdMsgRes());
-                                        doc.setProcessedAt(LocalDateTime.now());
-                                        electronicDocumentRepository.save(doc);
-                                        log.info("[STATUS-UPDATE] CDC: {} → {} (resultado de lote)", cdc, nuevoEstado);
+                                    List<MensajeSifenDTO> mensajes = mapearMensajes(res.getgResProc());
+                                    registrarResultadoSifen(doc, nuevoEstado, mensajes, "consultaLoteDE");
+                                    doc.setProcessedAt(LocalDateTime.now());
+                                    electronicDocumentRepository.save(doc);
+                                    log.info("[STATUS-UPDATE] CDC: {} → {} (resultado de lote)", cdc, nuevoEstado);
 
-                                        if (!estadoAnterior.equals(nuevoEstado) && isApprovedState(nuevoEstado)) {
-                                            InvoiceEmailService.EmailDispatchResult emailResult =
-                                                    invoiceEmailService.sendApprovedEmail(doc);
-                                            if (!emailResult.sent()) {
-                                                log.warn("[EMAIL] No se envió correo para CDC {}: {}",
-                                                        cdc, emailResult.reason());
-                                            }
+                                    if (!estadoAnterior.equals(nuevoEstado) && isApprovedState(nuevoEstado)) {
+                                        InvoiceEmailService.EmailDispatchResult emailResult =
+                                                invoiceEmailService.sendApprovedEmail(doc);
+                                        if (!emailResult.sent()) {
+                                            log.warn("[EMAIL] No se envió correo para CDC {}: {}",
+                                                    cdc, emailResult.reason());
                                         }
                                     }
-                                    break;
                                 }
+                                break;
                             }
                         }
                         // Retornar estado actualizado
                         ElectronicDocument updatedDoc = electronicDocumentRepository
                                 .findById(doc.getId()).orElse(doc);
-                        return DocumentStatusResponse.builder()
+                        return enriquecerConEventos(enriquecerConClasificacion(DocumentStatusResponse.builder()
                                 .cdc(updatedDoc.getCdc())
                                 .estado(updatedDoc.getEstado())
                                 .codigoEstado(updatedDoc.getSifenCodigo())
@@ -320,8 +329,9 @@ public class InvoiceService {
                                 .qrUrl(updatedDoc.getQrUrl())
                                 .createdAt(updatedDoc.getCreatedAt())
                                 .sentAt(updatedDoc.getSentAt())
-                                .processedAt(updatedDoc.getProcessedAt())
-                                .build();
+                                .processedAt(updatedDoc.getProcessedAt()),
+                                updatedDoc.getEstado(), updatedDoc.getSifenCodigo(),
+                                updatedDoc.getSifenMensaje(), updatedDoc.getResponseData()), updatedDoc.getCdc()).build();
                     }
                 }
 
@@ -332,10 +342,12 @@ public class InvoiceService {
                 if (respuesta != null && respuesta.getdCodRes() != null) {
                     String estadoAnterior = doc.getEstado();
                     String nuevoEstado = resolverEstadoDocumento(respuesta.getdCodRes());
-                    if (!"DESCONOCIDO".equals(nuevoEstado) && !nuevoEstado.startsWith("CODIGO_")) {
-                        doc.setEstado(nuevoEstado);
-                        doc.setSifenCodigo(respuesta.getdCodRes());
-                        doc.setSifenMensaje(respuesta.getdMsgRes());
+                    if (!"DESCONOCIDO".equals(nuevoEstado)) {
+                        List<MensajeSifenDTO> mensajes = List.of(MensajeSifenDTO.builder()
+                                .codigo(respuesta.getdCodRes())
+                                .descripcion(respuesta.getdMsgRes())
+                                .build());
+                        registrarResultadoSifen(doc, nuevoEstado, mensajes, "consultaDE");
                         doc.setProcessedAt(LocalDateTime.now());
                         electronicDocumentRepository.save(doc);
                         log.info("[STATUS-UPDATE] CDC: {} → {}", cdc, nuevoEstado);
@@ -355,7 +367,7 @@ public class InvoiceService {
             }
         }
 
-        return DocumentStatusResponse.builder()
+        return enriquecerConEventos(enriquecerConClasificacion(DocumentStatusResponse.builder()
                 .cdc(doc.getCdc())
                 .estado(doc.getEstado())
                 .codigoEstado(doc.getSifenCodigo())
@@ -364,8 +376,8 @@ public class InvoiceService {
                 .qrUrl(doc.getQrUrl())
                 .createdAt(doc.getCreatedAt())
                 .sentAt(doc.getSentAt())
-                .processedAt(doc.getProcessedAt())
-                .build();
+                .processedAt(doc.getProcessedAt()),
+                doc.getEstado(), doc.getSifenCodigo(), doc.getSifenMensaje(), doc.getResponseData()), doc.getCdc()).build();
     }
 
     // ─── Recepción Lote (Asíncrono) ───────────────────────────────────────────
@@ -442,122 +454,6 @@ public class InvoiceService {
             log.error("Error SIFEN al consultar RUC {}: {}", ruc, e.getMessage(), e);
             throw new com.ratones.sifenwrapper.exception.SifenServiceException(
                     "Error al consultar RUC: " + ruc, e);
-        }
-    }
-
-    // ─── Recepción Evento ─────────────────────────────────────────────────────
-
-    public RecepcionEventoResponse enviarEvento(EventoRequest request) {
-        try {
-            log.info("Enviando evento tipo {} para CDC: {}", request.getTipoEvento(), request.getCdc());
-
-            SifenConfig sifenConfig = sifenConfigFactory.getConfigForCurrentTenant();
-
-            EventosDE eventosDE = new EventosDE();
-            TgGroupTiEvt grupo = new TgGroupTiEvt();
-
-            switch (request.getTipoEvento()) {
-                case 1: { // Cancelación
-                    TrGeVeCan cancelacion = new TrGeVeCan();
-                    cancelacion.setId(request.getCdc());
-                    cancelacion.setmOtEve(request.getMotivo());
-                    grupo.setrGeVeCan(cancelacion);
-                    break;
-                }
-                case 2: { // Inutilización
-                    TrGeVeInu inutilizacion = new TrGeVeInu();
-                    inutilizacion.setdNumTim(request.getTimbrado());
-                    inutilizacion.setdEst(request.getEstablecimiento());
-                    inutilizacion.setdPunExp(request.getPuntoExpedicion());
-                    inutilizacion.setdNumIn(request.getNumeroDesde());
-                    inutilizacion.setdNumFin(request.getNumeroHasta());
-                    inutilizacion.setiTiDE(TTiDE.getByVal(request.getTipoDocumento().shortValue()));
-                    inutilizacion.setmOtEve(request.getMotivo());
-                    grupo.setrGeVeInu(inutilizacion);
-                    break;
-                }
-                case 3: { // Conformidad del receptor
-                    TrGeVeConf conformidad = new TrGeVeConf();
-                    conformidad.setId(request.getCdc());
-                    conformidad.setiTipConf(TiTipConf.getByVal(request.getTipoConformidad().shortValue()));
-                    conformidad.setdFecRecep(LocalDateTime.parse(request.getFechaRecepcion()));
-                    grupo.setrGeVeConf(conformidad);
-                    break;
-                }
-                case 4: { // Disconformidad del receptor
-                    TrGeVeDisconf disconformidad = new TrGeVeDisconf();
-                    disconformidad.setId(request.getCdc());
-                    disconformidad.setmOtEve(request.getMotivo());
-                    grupo.setrGeVeDisconf(disconformidad);
-                    break;
-                }
-                case 5: { // Desconocimiento del receptor
-                    TrGeVeDescon desconocimiento = new TrGeVeDescon();
-                    desconocimiento.setId(request.getCdc());
-                    if (request.getFechaEmision() != null) {
-                        desconocimiento.setdFecEmi(LocalDateTime.parse(request.getFechaEmision()));
-                    }
-                    if (request.getFechaRecepcion() != null) {
-                        desconocimiento.setdFecRecep(LocalDateTime.parse(request.getFechaRecepcion()));
-                    }
-                    if (request.getReceptorContribuyente() != null) {
-                        desconocimiento.setiTipRec(request.getReceptorContribuyente()
-                                ? TiNatRec.CONTRIBUYENTE : TiNatRec.NO_CONTRIBUYENTE);
-                    }
-                    desconocimiento.setdNomRec(request.getNombreReceptor());
-                    desconocimiento.setdRucRec(request.getRucReceptor());
-                    desconocimiento.setdDVRec(request.getDvReceptor());
-                    if (request.getTipoDocIdentidad() != null) {
-                        desconocimiento.setdTipIDRec(TiTipDocRec.getByVal(request.getTipoDocIdentidad().shortValue()));
-                    }
-                    desconocimiento.setdNumID(request.getNumeroDocIdentidad());
-                    desconocimiento.setmOtEve(request.getMotivo());
-                    grupo.setrGeVeDescon(desconocimiento);
-                    break;
-                }
-                case 6: { // Notificación de recepción
-                    TrGeVeNotRec notificacion = new TrGeVeNotRec();
-                    notificacion.setId(request.getCdc());
-                    if (request.getFechaEmision() != null) {
-                        notificacion.setdFecEmi(LocalDateTime.parse(request.getFechaEmision()));
-                    }
-                    if (request.getFechaRecepcion() != null) {
-                        notificacion.setdFecRecep(LocalDateTime.parse(request.getFechaRecepcion()));
-                    }
-                    if (request.getReceptorContribuyente() != null) {
-                        notificacion.setiTipRec(request.getReceptorContribuyente()
-                                ? TiNatRec.CONTRIBUYENTE : TiNatRec.NO_CONTRIBUYENTE);
-                    }
-                    notificacion.setdNomRec(request.getNombreReceptor());
-                    notificacion.setdRucRec(request.getRucReceptor());
-                    notificacion.setdDVRec(request.getDvReceptor());
-                    if (request.getTipoDocIdentidad() != null) {
-                        notificacion.setdTipIDRec(TiTipDocRec.getByVal(request.getTipoDocIdentidad().shortValue()));
-                    }
-                    notificacion.setdNumID(request.getNumeroDocIdentidad());
-                    notificacion.setdTotalGs(request.getTotalGs());
-                    grupo.setrGeVeNotRec(notificacion);
-                    break;
-                }
-                default:
-                    throw new IllegalArgumentException("Tipo de evento no soportado: " + request.getTipoEvento());
-            }
-
-            TrGesEve gesEve = new TrGesEve();
-            gesEve.setId("1");
-            gesEve.setdFecFirma(LocalDateTime.now(PY_ZONE));
-            gesEve.setgGroupTiEvt(grupo);
-
-            eventosDE.setrGesEveList(List.of(gesEve));
-
-            RespuestaRecepcionEvento respuesta = sifenConfigFactory.withSifenConfig(sifenConfig,
-                    () -> Sifen.recepcionEvento(eventosDE));
-            return buildEventoResponse(request.getCdc(), respuesta);
-
-        } catch (SifenException e) {
-            log.error("Error SIFEN al enviar evento: {}", e.getMessage(), e);
-            throw new com.ratones.sifenwrapper.exception.SifenServiceException(
-                    "Error al enviar evento", e);
         }
     }
 
@@ -703,14 +599,22 @@ public class InvoiceService {
                 if (respuesta.getgResProcLoteList() != null && !respuesta.getgResProcLoteList().isEmpty()) {
                     List<ResultadoLoteItemDTO> resultados = new ArrayList<>();
                     for (TgResProcLote item : respuesta.getgResProcLoteList()) {
+                        String codigoItem = null;
                         String descripcionItem = null;
                         if (item.getgResProc() != null && !item.getgResProc().isEmpty()) {
+                            codigoItem = item.getgResProc().get(0).getdCodRes();
                             descripcionItem = item.getgResProc().get(0).getdMsgRes();
                         }
+                        String estadoLocalItem = mapearEstadoLote(item.getdEstRes());
+                        SifenRechazoClassifier.ClasificacionRechazo clasificacionItem =
+                                SifenRechazoClassifier.clasificar(estadoLocalItem, codigoItem);
                         resultados.add(ResultadoLoteItemDTO.builder()
                                 .cdc(item.getId())
                                 .estado(item.getdEstRes())
                                 .descripcion(descripcionItem)
+                                .codigo(codigoItem)
+                                .reenviable(clasificacionItem.reenviable())
+                                .clasificacionReenvio(clasificacionItem.clasificacion().name())
                                 .build());
                     }
                     builder.resultados(resultados);
@@ -1073,96 +977,18 @@ public class InvoiceService {
         return builder.build();
     }
 
-    private RecepcionEventoResponse buildEventoResponse(String cdc, RespuestaRecepcionEvento respuesta) {
-        RecepcionEventoResponse.RecepcionEventoResponseBuilder builder =
-                RecepcionEventoResponse.builder().cdc(cdc);
-        if (respuesta != null) {
-            // Extraer estado del resultado de procesamiento del evento
-            if (respuesta.getgResProcEVe() != null && !respuesta.getgResProcEVe().isEmpty()) {
-                TgResProcEVe primerRes = respuesta.getgResProcEVe().get(0);
-                String estadoEvento = primerRes.getdEstRes();
-                builder.estado(estadoEvento != null ? estadoEvento.toUpperCase() : "DESCONOCIDO");
-
-                if (primerRes.getgResProc() != null && !primerRes.getgResProc().isEmpty()) {
-                    TgResProc primerProc = primerRes.getgResProc().get(0);
-                    builder.codigoEstado(primerProc.getdCodRes())
-                            .descripcionEstado(primerProc.getdMsgRes());
-
-                    List<MensajeSifenDTO> mensajes = new ArrayList<>();
-                    for (TgResProc msg : primerRes.getgResProc()) {
-                        mensajes.add(MensajeSifenDTO.builder()
-                                .codigo(msg.getdCodRes())
-                                .descripcion(msg.getdMsgRes())
-                                .build());
-                    }
-                    builder.mensajes(mensajes);
-                } else {
-                    builder.codigoEstado(respuesta.getdCodRes())
-                            .descripcionEstado(respuesta.getdMsgRes());
-                }
-            } else if (respuesta.getdCodRes() != null) {
-                // Fallback a BaseResponse (datos parseados por la librería)
-                builder.codigoEstado(respuesta.getdCodRes())
-                        .descripcionEstado(respuesta.getdMsgRes())
-                        .estado(resolverEstado(respuesta.getdCodRes()));
-            } else if (respuesta.getRespuestaBruta() != null) {
-                String raw = respuesta.getRespuestaBruta();
-
-                // Detectar respuestas no-XML (ej. HTML de BIG-IP/F5 por sesión expirada)
-                if (raw.trim().startsWith("<html") || raw.trim().startsWith("<!DOCTYPE html")) {
-                    builder.estado("ERROR_CONEXION")
-                            .codigoEstado("CONN_ERR")
-                            .descripcionEstado("SIFEN devolvió una página HTML en lugar de XML. " +
-                                    "Posible sesión SSL expirada o problema de red. Reinicie la aplicación e intente nuevamente.");
-                    log.error("SIFEN devolvió HTML en lugar de XML. Posible problema de sesión SSL/red. HTTP status={}",
-                            respuesta.getCodigoEstado());
-                } else {
-                    // Parsear XML bruto para extraer estado/error
-                    // Esto ocurre cuando SIFEN responde con un wrapper inesperado (ej. rRetEnviDe)
-                    String estRes = extraerTagXml(raw, "dEstRes");
-                    String codRes = extraerTagXml(raw, "dCodRes");
-                    String msgRes = extraerTagXml(raw, "dMsgRes");
-
-                    if (estRes != null) {
-                        builder.estado(estRes.toUpperCase());
-                    } else {
-                        builder.estado("DESCONOCIDO");
-                    }
-                    builder.codigoEstado(codRes).descripcionEstado(msgRes);
-
-                    if (codRes != null) {
-                        builder.mensajes(List.of(MensajeSifenDTO.builder()
-                                .codigo(codRes).descripcion(msgRes).build()));
-                    }
-                    log.warn("Respuesta SIFEN con wrapper inesperado. Estado={}, Código={}, Mensaje={}",
-                            estRes, codRes, msgRes);
-                }
-            } else {
-                builder.estado("DESCONOCIDO");
-            }
-
-            builder.respuestaSifen(RespuestaSifenDTO.builder()
-                    .codigoRespuesta(respuesta.getCodigoEstado())
-                    .descripcionRespuesta(respuesta.getdMsgRes())
-                    .xmlRespuesta(respuesta.getRespuestaBruta())
-                    .xmlEnviado(respuesta.getRequestSent())
-                    .build());
-        }
-        return builder.build();
-    }
-
-    private static final String MSG_ERROR_CONEXION =
+    static final String MSG_ERROR_CONEXION =
             "SIFEN devolvió una página HTML en lugar de XML. " +
             "Posible sesión SSL expirada o problema de red/infraestructura del servidor SIFEN. " +
             "Reinicie la aplicación e intente nuevamente.";
 
-    private boolean esRespuestaHtml(String raw) {
+    boolean esRespuestaHtml(String raw) {
         if (raw == null) return false;
         String trimmed = raw.trim().toLowerCase();
         return trimmed.startsWith("<html") || trimmed.startsWith("<!doctype html");
     }
 
-    private RespuestaSifenDTO buildRespuestaSifenDTO(com.roshka.sifen.internal.response.BaseResponse respuesta) {
+    RespuestaSifenDTO buildRespuestaSifenDTO(com.roshka.sifen.internal.response.BaseResponse respuesta) {
         return RespuestaSifenDTO.builder()
                 .codigoRespuesta(respuesta.getCodigoEstado())
                 .descripcionRespuesta(respuesta.getdMsgRes())
@@ -1175,7 +1001,7 @@ public class InvoiceService {
      * Extrae el contenido de un tag XML simple del raw string.
      * Busca tanto con namespace (ns2:tag) como sin él.
      */
-    private String extraerTagXml(String xml, String tagName) {
+    String extraerTagXml(String xml, String tagName) {
         if (xml == null) return null;
         Pattern p = Pattern.compile("<(?:[\\w]+:)?" + tagName + "[^>]*>([^<]+)</");
         Matcher m = p.matcher(xml);
@@ -1186,7 +1012,7 @@ public class InvoiceService {
      * Mapea códigos de estado SIFEN a descripciones legibles.
      * Ver Manual Técnico SIFEN v150 - Tabla de códigos de respuesta.
      */
-    private String resolverEstado(String codigoEstado) {
+    String resolverEstado(String codigoEstado) {
         if (codigoEstado == null) return "DESCONOCIDO";
         switch (codigoEstado) {
             case "0260": return "APROBADO";
@@ -1219,6 +1045,179 @@ public class InvoiceService {
             case "0420": return "APROBADO";      // consultaDE: Documento Aprobado
             case "0422": return "RECHAZADO";     // consultaDE: No Existe o Rechazado
             default: return "DESCONOCIDO";
+        }
+    }
+
+    /**
+     * Mapea el estado textual de un DE dentro de un resultado de lote ("Aprobado",
+     * "Rechazado", etc. — campo dEstRes) al estado local. Usado tanto por el poller
+     * de lotes como por la consulta de estado con refresh=true, para no depender de
+     * que gResProc venga poblado (puede llegar vacío en un rechazo).
+     */
+    String mapearEstadoLote(String estadoSifen) {
+        if (estadoSifen == null) return "DESCONOCIDO";
+        switch (estadoSifen.toLowerCase()) {
+            case "aprobado": return "APROBADO";
+            case "aprobado con observación":
+            case "aprobado con observacion": return "APROBADO_CON_OBSERVACION";
+            case "rechazado": return "RECHAZADO";
+            default: return "DESCONOCIDO";
+        }
+    }
+
+    /** Convierte la lista de mensajes de procesamiento SIFEN (dCodRes/dMsgRes) al DTO expuesto al ERP. */
+    List<MensajeSifenDTO> mapearMensajes(List<TgResProc> gResProc) {
+        if (gResProc == null || gResProc.isEmpty()) {
+            return List.of();
+        }
+        return gResProc.stream()
+                .map(m -> MensajeSifenDTO.builder().codigo(m.getdCodRes()).descripcion(m.getdMsgRes()).build())
+                .toList();
+    }
+
+    /**
+     * Persiste el resultado de una consulta SIFEN (lote o individual) en el documento:
+     * el nuevo estado; el primer mensaje en sifenCodigo/sifenMensaje (compatibilidad con
+     * el resto del sistema y con los filtros de reenvío masivo); y el detalle completo
+     * (todos los mensajes + origen de la consulta) en responseData, para que el ERP y
+     * GET /logs/transactions puedan ver el motivo completo, no solo el primero.
+     *
+     * Si el resultado es RECHAZADO sin mensajes (gResProc vacío — puede ocurrir según el
+     * Manual Técnico), no deja los valores del envío anterior (ej. "0300 - Lote recibido
+     * con éxito"): registra explícitamente que SIFEN no detalló el motivo.
+     */
+    void registrarResultadoSifen(ElectronicDocument doc, String nuevoEstado,
+                                  List<MensajeSifenDTO> mensajes, String fuente) {
+        doc.setEstado(nuevoEstado);
+        if (!mensajes.isEmpty()) {
+            doc.setSifenCodigo(mensajes.get(0).getCodigo());
+            doc.setSifenMensaje(mensajes.get(0).getDescripcion());
+        } else if ("RECHAZADO".equals(nuevoEstado)) {
+            doc.setSifenCodigo("SIN_DETALLE");
+            doc.setSifenMensaje("SIFEN rechazó el documento sin detallar el motivo por esta vía ("
+                    + fuente + ")."
+                    + (doc.getNroLote() != null ? " Lote: " + doc.getNroLote() + "." : ""));
+        }
+        doc.setResponseData(serializarResponseData(nuevoEstado, mensajes, fuente));
+    }
+
+    private String serializarResponseData(String estado, List<MensajeSifenDTO> mensajes, String fuente) {
+        try {
+            ObjectNode root = objectMapper.createObjectNode();
+            root.put("estado", estado);
+            root.put("fuente", fuente);
+            root.put("consultadoEn", LocalDateTime.now(PY_ZONE).toString());
+            root.set("mensajes", objectMapper.valueToTree(mensajes));
+            return objectMapper.writeValueAsString(root);
+        } catch (Exception e) {
+            log.warn("No se pudo serializar responseData: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Agrega los campos orientados al ERP (mensajes, reenviable, clasificación, acción
+     * sugerida) a un DocumentStatusResponse en construcción. mensajes se toma de
+     * responseData si está disponible (todos los mensajes SIFEN); si no, cae al par
+     * sifenCodigo/sifenMensaje persistido.
+     */
+    private DocumentStatusResponse.DocumentStatusResponseBuilder enriquecerConClasificacion(
+            DocumentStatusResponse.DocumentStatusResponseBuilder builder,
+            String estado, String sifenCodigo, String sifenMensaje, String responseDataJson) {
+        List<MensajeSifenDTO> mensajes = extraerMensajes(sifenCodigo, sifenMensaje, responseDataJson);
+        SifenRechazoClassifier.ClasificacionRechazo clasificacion =
+                SifenRechazoClassifier.clasificar(estado, sifenCodigo);
+        return builder.mensajes(mensajes)
+                .reenviable(clasificacion.reenviable())
+                .clasificacionReenvio(clasificacion.clasificacion().name())
+                .accionSugerida(clasificacion.accionSugerida());
+    }
+
+    /**
+     * Agrega el resumen de eventos SIFEN al estado local. Se consulta también cuando
+     * no hay ElectronicDocument local (NO_ENCONTRADO): un CDC ajeno puede tener eventos
+     * de receptor (tipos 3-6) registrados por esta empresa aunque el DE lo haya emitido
+     * otra. No se enriquece en el early-return de lote en procesamiento (0361): un
+     * documento aún no concluido no puede tener eventos.
+     */
+    private DocumentStatusResponse.DocumentStatusResponseBuilder enriquecerConEventos(
+            DocumentStatusResponse.DocumentStatusResponseBuilder builder, String cdc) {
+        Long tenantId = TenantContext.get();
+        if (tenantId == null) {
+            return builder;
+        }
+        List<SifenEvent> eventos = sifenEventRepository.findByCompanyIdAndCdcOrderByCreatedAtDesc(tenantId, cdc);
+        if (eventos.isEmpty()) {
+            return builder.cancelado(false);
+        }
+        boolean cancelado = eventos.stream()
+                .anyMatch(e -> e.getTipoEvento() == 1 && SifenEvent.APROBADO.equals(e.getEstado()));
+        SifenEvent ultimo = eventos.get(0);
+        return builder.cancelado(cancelado)
+                .ultimoEvento(EventoResumenDTO.builder()
+                        .id(ultimo.getId())
+                        .eventoId(ultimo.getEventoId())
+                        .tipoEvento(ultimo.getTipoEvento())
+                        .cdc(ultimo.getCdc())
+                        .estado(ultimo.getEstado())
+                        .sifenCodigo(ultimo.getSifenCodigo())
+                        .sifenMensaje(ultimo.getSifenMensaje())
+                        .protocoloAutorizacion(ultimo.getProtocoloAutorizacion())
+                        .createdAt(ultimo.getCreatedAt())
+                        .sentAt(ultimo.getSentAt())
+                        .processedAt(ultimo.getProcessedAt())
+                        .build());
+    }
+
+    private List<MensajeSifenDTO> extraerMensajes(String sifenCodigo, String sifenMensaje, String responseDataJson) {
+        if (responseDataJson != null && !responseDataJson.isBlank()) {
+            try {
+                JsonNode root = objectMapper.readTree(responseDataJson);
+                JsonNode mensajesNode = root.get("mensajes");
+                if (mensajesNode != null && mensajesNode.isArray() && !mensajesNode.isEmpty()) {
+                    List<MensajeSifenDTO> mensajes = new ArrayList<>();
+                    for (JsonNode m : mensajesNode) {
+                        mensajes.add(MensajeSifenDTO.builder()
+                                .codigo(m.path("codigo").asText(null))
+                                .descripcion(m.path("descripcion").asText(null))
+                                .build());
+                    }
+                    return mensajes;
+                }
+            } catch (Exception e) {
+                log.debug("No se pudo parsear responseData para extraer mensajes: {}", e.getMessage());
+            }
+        }
+        if (sifenCodigo != null || sifenMensaje != null) {
+            return List.of(MensajeSifenDTO.builder().codigo(sifenCodigo).descripcion(sifenMensaje).build());
+        }
+        return List.of();
+    }
+
+    /**
+     * Archiva el rechazo actual del documento (estado, código, mensaje, lote) en
+     * responseData.historial antes de reencolarlo, para no perder el motivo original
+     * cuando /resend limpia sifenCodigo/sifenMensaje.
+     */
+    private String archivarRechazoEnHistorial(ElectronicDocument doc) {
+        try {
+            ObjectNode root = doc.getResponseData() != null && !doc.getResponseData().isBlank()
+                    ? (ObjectNode) objectMapper.readTree(doc.getResponseData())
+                    : objectMapper.createObjectNode();
+            ArrayNode historial = root.has("historial") && root.get("historial").isArray()
+                    ? (ArrayNode) root.get("historial")
+                    : root.putArray("historial");
+            ObjectNode entrada = objectMapper.createObjectNode();
+            entrada.put("estado", doc.getEstado());
+            entrada.put("sifenCodigo", doc.getSifenCodigo());
+            entrada.put("sifenMensaje", doc.getSifenMensaje());
+            entrada.put("nroLote", doc.getNroLote());
+            entrada.put("archivadoEn", LocalDateTime.now(PY_ZONE).toString());
+            historial.add(entrada);
+            return objectMapper.writeValueAsString(root);
+        } catch (Exception e) {
+            log.warn("No se pudo archivar el historial de rechazo para CDC {}: {}", doc.getCdc(), e.getMessage());
+            return doc.getResponseData();
         }
     }
 
@@ -1300,6 +1299,182 @@ public class InvoiceService {
                 .orElseThrow(() -> new IllegalArgumentException("No se encontró documento con CDC: " + cdc));
 
         return invoiceEmailService.sendApprovedEmail(doc);
+    }
+
+    // ─── Reenvío de documentos rechazados (mismo CDC) ─────────────────────────
+
+    /**
+     * Reencola un documento RECHAZADO o ERROR para reenvío a SIFEN reutilizando el
+     * mismo CDC. Válido según el Manual Técnico SIFEN §6.5: si el ajuste no altera los
+     * campos que componen el CDC, el documento corregido puede volver a someterse a
+     * validación con el mismo CDC original, cuantas veces sea necesario.
+     *
+     * Sin payloadCorregido: reintenta con los datos ya almacenados (útil para 1004 —
+     * firma adelantada — donde el problema es la hora de firma, no los datos).
+     * Con payloadCorregido: reemplaza el requestData almacenado; se valida como un
+     * prepare normal (resolveParams + validarReglasReceptor) y se exige que el CDC
+     * recalculado sea idéntico al original.
+     *
+     * Por defecto se rechaza el reenvío de documentos clasificados NO_REENVIABLE
+     * (SifenRechazoClassifier — el código afecta un campo del CDC); force=true omite
+     * esa verificación orientativa, pero el guard de igualdad de CDC sigue aplicando
+     * siempre, sin excepción.
+     *
+     * El documento vuelve a estado PREPARADO; BatchSenderService lo reconstruye desde
+     * requestData, lo re-firma con la hora corregida (ver SifenMapper.FIRMA_BACKDATE_SECONDS)
+     * y lo reenvía en el próximo ciclo del scheduler.
+     */
+    public DocumentStatusResponse reenviarDocumento(String cdc, EmitirFacturaRequest payloadCorregido, boolean force) {
+        Long companyId = TenantContext.get();
+        if (companyId == null) {
+            throw new IllegalStateException("No hay tenant configurado para la request actual");
+        }
+
+        ElectronicDocument doc = electronicDocumentRepository.findByCompanyIdAndCdc(companyId, cdc)
+                .orElseThrow(() -> new IllegalArgumentException("No se encontró documento con CDC: " + cdc));
+
+        validarReenvio(doc);
+
+        if (!force) {
+            SifenRechazoClassifier.ClasificacionRechazo clasificacion =
+                    SifenRechazoClassifier.clasificar(doc.getEstado(), doc.getSifenCodigo());
+            if (clasificacion.clasificacion() == SifenRechazoClassifier.ClasificacionReenvio.NO_REENVIABLE) {
+                throw new IllegalArgumentException(
+                        "El documento con CDC " + cdc + " no puede reenviarse con el mismo CDC: "
+                                + clasificacion.accionSugerida()
+                                + " Si de todas formas desea intentarlo, use ?force=true.");
+            }
+        }
+
+        EmitirFacturaRequest request;
+        if (payloadCorregido != null) {
+            request = payloadCorregido;
+            request.setParams(resolveParams(request.getParams()));
+            validarReglasReceptor(request);
+        } else {
+            try {
+                request = objectMapper.readValue(doc.getRequestData(), EmitirFacturaRequest.class);
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException(
+                        "No se pudieron leer los datos originales del documento para reenviarlo: "
+                                + e.getMessage());
+            }
+        }
+
+        // Verificar que el request (almacenado o corregido) regenere exactamente el
+        // mismo CDC antes de reencolar. Es el requisito legal para reutilizar el CDC,
+        // y la salvaguarda real — independiente de la clasificación orientativa de arriba.
+        String cdcRecalculado;
+        try {
+            DocumentoElectronico de = SifenMapper.toDocumentoElectronico(request);
+            cdcRecalculado = de.obtenerCDC();
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "No se pudo regenerar el documento electrónico para reenviarlo: " + e.getMessage());
+        }
+
+        if (!doc.getCdc().equals(cdcRecalculado)) {
+            throw new IllegalArgumentException(
+                    (payloadCorregido != null
+                            ? "El payload corregido regeneraría un CDC distinto ("
+                            : "Los datos almacenados del documento regenerarían un CDC distinto (")
+                            + cdcRecalculado + ") al original (" + doc.getCdc()
+                            + "). No se puede reenviar reutilizando el mismo CDC.");
+        }
+
+        String requestJsonNuevo = null;
+        if (payloadCorregido != null) {
+            try {
+                requestJsonNuevo = objectMapper.writeValueAsString(payloadCorregido);
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("No se pudo serializar el payload corregido: " + e.getMessage());
+            }
+        }
+
+        String estadoAnterior = doc.getEstado();
+        doc.setResponseData(archivarRechazoEnHistorial(doc));
+        if (requestJsonNuevo != null) {
+            doc.setRequestData(requestJsonNuevo);
+        }
+        doc.setEstado("PREPARADO");
+        doc.setNroLote(null);
+        doc.setSifenCodigo(null);
+        doc.setSifenMensaje(null);
+        doc.setSentAt(null);
+        doc.setProcessedAt(null);
+        electronicDocumentRepository.save(doc);
+
+        log.info("[RESEND] CDC: {} — {} → PREPARADO (reencolado para reenvío con mismo CDC{})",
+                cdc, estadoAnterior, payloadCorregido != null ? ", con payload corregido" : "");
+
+        return DocumentStatusResponse.builder()
+                .cdc(doc.getCdc())
+                .estado(doc.getEstado())
+                .qrUrl(doc.getQrUrl())
+                .createdAt(doc.getCreatedAt())
+                .build();
+    }
+
+    /**
+     * Reencola todos los documentos RECHAZADO del tenant actual cuyo código de error
+     * SIFEN coincida (por defecto 1004 — firma adelantada). Devuelve el resultado por
+     * documento; los errores individuales no interrumpen el procesamiento del resto.
+     */
+    public List<ResendResultDTO> reenviarRechazados(String sifenCodigo) {
+        Long companyId = TenantContext.get();
+        if (companyId == null) {
+            throw new IllegalStateException("No hay tenant configurado para la request actual");
+        }
+
+        String codigo = (sifenCodigo == null || sifenCodigo.isBlank())
+                ? DEFAULT_RESEND_SIFEN_CODIGO : sifenCodigo;
+
+        List<ElectronicDocument> docs = electronicDocumentRepository
+                .findByCompanyIdAndEstadoAndSifenCodigo(companyId, "RECHAZADO", codigo);
+
+        List<ResendResultDTO> resultados = new ArrayList<>();
+        for (ElectronicDocument doc : docs) {
+            try {
+                reenviarDocumento(doc.getCdc(), null, false);
+                resultados.add(ResendResultDTO.builder()
+                        .cdc(doc.getCdc())
+                        .reenviado(true)
+                        .estadoAnterior("RECHAZADO")
+                        .detalle("Reencolado como PREPARADO para reenvío")
+                        .build());
+            } catch (Exception e) {
+                log.warn("[RESEND] No se pudo reencolar CDC {}: {}", doc.getCdc(), e.getMessage());
+                resultados.add(ResendResultDTO.builder()
+                        .cdc(doc.getCdc())
+                        .reenviado(false)
+                        .estadoAnterior("RECHAZADO")
+                        .detalle(e.getMessage())
+                        .build());
+            }
+        }
+        return resultados;
+    }
+
+    private void validarReenvio(ElectronicDocument doc) {
+        String estado = doc.getEstado();
+        if (ESTADOS_REENVIABLES.contains(estado)) {
+            return;
+        }
+        switch (estado) {
+            case "PREPARADO":
+                throw new IllegalArgumentException(
+                        "El documento con CDC " + doc.getCdc()
+                                + " ya está en cola de envío (PREPARADO). No es necesario reenviarlo.");
+            case "ENVIADO":
+                throw new IllegalArgumentException(
+                        "El documento con CDC " + doc.getCdc()
+                                + " ya fue transmitido a SIFEN y está en curso (ENVIADO). "
+                                + "Espere el resultado del lote antes de reenviarlo, para evitar duplicados.");
+            default:
+                throw new IllegalArgumentException(
+                        "El documento con CDC " + doc.getCdc() + " está en estado " + estado
+                                + " y no puede reenviarse.");
+        }
     }
 
     private boolean isApprovedState(String estado) {

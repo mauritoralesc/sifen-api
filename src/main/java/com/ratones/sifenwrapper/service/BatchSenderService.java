@@ -87,12 +87,35 @@ public class BatchSenderService {
                 try {
                     EmitirFacturaRequest request = objectMapper.readValue(
                             doc.getRequestData(), EmitirFacturaRequest.class);
-                    documentos.add(SifenMapper.toDocumentoElectronico(request));
+                    DocumentoElectronico de = SifenMapper.toDocumentoElectronico(request);
+
+                    // Verificar que el CDC recalculado coincida con el persistido.
+                    // Un reenvío (o cualquier reconstrucción) nunca puede alterar el CDC
+                    // original: es requisito legal para la reutilización del CDC ante SIFEN.
+                    String cdcRecalculado = de.obtenerCDC();
+                    if (!doc.getCdc().equals(cdcRecalculado)) {
+                        log.error("[BATCH-SEND] CDC recalculado no coincide con el original. "
+                                        + "Original={}, recalculado={}. Documento marcado como ERROR.",
+                                doc.getCdc(), cdcRecalculado);
+                        doc.setEstado("ERROR");
+                        // Sentinel no numérico (nunca colisiona con un código SIFEN real): el
+                        // clasificador lo trata como REQUIERE_CORRECCION — no es reenviable en
+                        // blanco, requiere corregir el requestData con el payload correcto.
+                        doc.setSifenCodigo("CDC_MISMATCH");
+                        doc.setSifenMensaje("El CDC recalculado (" + cdcRecalculado
+                                + ") no coincide con el original (" + doc.getCdc()
+                                + "). Verifique que los datos del documento no hayan cambiado.");
+                        documentRepository.save(doc);
+                        continue;
+                    }
+
+                    documentos.add(de);
                     docsValidos.add(doc);
                 } catch (Exception e) {
                     log.error("[BATCH-SEND] Error reconstruyendo DE CDC={}: {}",
                             doc.getCdc(), e.getMessage());
                     doc.setEstado("ERROR");
+                    doc.setSifenCodigo("ERROR_RECONSTRUCCION");
                     doc.setSifenMensaje("Error al reconstruir DE: " + e.getMessage());
                     documentRepository.save(doc);
                 }

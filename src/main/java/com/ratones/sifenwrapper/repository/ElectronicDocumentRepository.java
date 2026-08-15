@@ -21,6 +21,9 @@ public interface ElectronicDocumentRepository extends JpaRepository<ElectronicDo
 
     List<ElectronicDocument> findByCompanyIdAndEstado(Long companyId, String estado);
 
+    List<ElectronicDocument> findByCompanyIdAndEstadoAndSifenCodigo(
+            Long companyId, String estado, String sifenCodigo);
+
     @Query("SELECT DISTINCT e.companyId FROM ElectronicDocument e WHERE e.estado = :estado")
     List<Long> findDistinctCompanyIdsByEstado(@Param("estado") String estado);
 
@@ -57,4 +60,21 @@ public interface ElectronicDocumentRepository extends JpaRepository<ElectronicDo
        Page<ElectronicDocument> findAllByEstadoOrderByCreatedAtDesc(String estado, Pageable pageable);
 
        Page<ElectronicDocument> findAllByCompanyIdAndEstadoOrderByCreatedAtDesc(Long companyId, String estado, Pageable pageable);
+
+    /**
+     * Documentos dentro de un rango de numeración (inutilización, tipo 2 de eventos).
+     * {@code numero} es VARCHAR(7) con padding de ceros: la comparación lexicográfica
+     * >=/<= solo equivale a la numérica si el caller rellena desde/hasta a 7 dígitos.
+     */
+    @Query("SELECT d FROM ElectronicDocument d " +
+           "WHERE d.companyId = :companyId AND d.establecimiento = :establecimiento " +
+           "AND d.punto = :punto AND d.tipoDocumento = :tipoDocumento " +
+           "AND d.numero >= :desde AND d.numero <= :hasta")
+    List<ElectronicDocument> findEnRango(
+            @Param("companyId") Long companyId,
+            @Param("establecimiento") String establecimiento,
+            @Param("punto") String punto,
+            @Param("tipoDocumento") Short tipoDocumento,
+            @Param("desde") String desde,
+            @Param("hasta") String hasta);
 }

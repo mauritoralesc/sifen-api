@@ -56,6 +56,14 @@ public class GlobalExceptionHandler {
                 .body(SifenApiResponse.error(detalle, "VALIDATION_ERROR"));
     }
 
+    @ExceptionHandler(EventoDuplicadoException.class)
+    public ResponseEntity<SifenApiResponse<Void>> handleEventoDuplicado(EventoDuplicadoException ex) {
+        log.warn("Evento duplicado: {}", ex.getMessage());
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(SifenApiResponse.error(ex.getMessage(), "EVENT_DUPLICATE"));
+    }
+
     @ExceptionHandler(NullPointerException.class)
     public ResponseEntity<SifenApiResponse<Void>> handleNullPointer(NullPointerException ex) {
         log.error("NullPointerException: {}", ex.getMessage(), ex);

@@ -32,6 +32,13 @@ public class SifenMapper {
     private static final ZoneId PY_ZONE = ZoneId.of("America/Asuncion");
     private static final int CODIGO_SEGURIDAD_LENGTH = 9;
 
+    /**
+     * Margen de seguridad para dFecFirma: se firma con la hora actual menos este
+     * margen, para absorber desfases de reloj del servidor y evitar el rechazo
+     * SIFEN 1004 ("La fecha y hora de la firma digital es adelantada").
+     */
+    public static final long FIRMA_BACKDATE_SECONDS = 120;
+
     // ─── DocumentoElectronico ─────────────────────────────────────────────────
 
     public DocumentoElectronico toDocumentoElectronico(EmitirFacturaRequest req) {
@@ -45,8 +52,6 @@ public class SifenMapper {
 
         DocumentoElectronico de = new DocumentoElectronico();
 
-        // Fecha de firma digital y sistema de facturación
-        de.setdFecFirma(LocalDateTime.now(PY_ZONE));
         de.setdSisFact((short) 1); // 1 = Sistema del contribuyente
 
         // Operación del DE (tipo emisión, código seguridad)
@@ -64,6 +69,11 @@ public class SifenMapper {
         // Datos generales de la operación (fecha, emisor, receptor, operación comercial)
         TdDatGralOpe datGralOpe = buildDatosGenerales(data, params);
         de.setgDatGralOpe(datGralOpe);
+
+        // Fecha de firma digital: hora actual con margen de seguridad hacia atrás
+        // (FIRMA_BACKDATE_SECONDS) para absorber desfases de reloj del servidor.
+        // Nunca puede quedar antes de la fecha de emisión (SIFEN exige firma >= emisión).
+        de.setdFecFirma(calcularFechaFirma(datGralOpe.getdFeEmiDE()));
 
         // Datos específicos por tipo de DE (factura, NC/ND, remisión, items)
         TgDtipDE dtipDE = buildDtipDE(data);
@@ -421,6 +431,22 @@ public class SifenMapper {
         }
 
         return camCond;
+    }
+
+    // ─── Fecha de firma ───────────────────────────────────────────────────────
+
+    /**
+     * Calcula dFecFirma con un margen de seguridad hacia atrás (FIRMA_BACKDATE_SECONDS)
+     * respecto a la hora actual, para evitar el rechazo SIFEN 1004 ("La fecha y hora
+     * de la firma digital es adelantada") ante pequeños desfases del reloj del servidor.
+     * Nunca retorna una fecha anterior a dFeEmiDE, porque SIFEN exige firma >= emisión.
+     */
+    private LocalDateTime calcularFechaFirma(LocalDateTime fechaEmision) {
+        LocalDateTime firma = LocalDateTime.now(PY_ZONE).minusSeconds(FIRMA_BACKDATE_SECONDS);
+        if (fechaEmision != null && firma.isBefore(fechaEmision)) {
+            return fechaEmision;
+        }
+        return firma;
     }
 
     // ─── Items ────────────────────────────────────────────────────────────────

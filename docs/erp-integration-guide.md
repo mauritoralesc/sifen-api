@@ -51,10 +51,15 @@ ERP                         SIFEN Wrapper               SIFEN
 | `ENVIADO` | Lote recibido por SIFEN, esperando resultado | Mostrar como "en proceso" |
 | `APROBADO` | SIFEN aprobó el documento | Mostrar como "aprobado", habilitar descarga KUDE |
 | `APROBADO_CON_OBSERVACION` | Aprobado con observaciones menores | Tratar igual que APROBADO |
-| `RECHAZADO` | SIFEN rechazó el documento — datos inválidos | Notificar al operador, no reintentar con mismo número |
+| `RECHAZADO` | SIFEN rechazó el documento — ver `reenviable`/`clasificacionReenvio`/`accionSugerida` en la respuesta de `/status` (detalle completo en [motivo-rechazo-y-reenvio.md](motivo-rechazo-y-reenvio.md)) | Si `reenviable=true`, reenviar con `POST /invoices/{cdc}/resend` (sin body si es `AUTOMATICO`, con el payload corregido si es `REQUIERE_CORRECCION`). Si `clasificacionReenvio=NO_REENVIABLE`, notificar al operador e inutilizar el número |
 | `ERROR` | Fallo interno (cert, datos corruptos, etc.) | Notificar al operador, revisar logs |
-| `CANCELADO` | Documento cancelado por evento | Mostrar como cancelado |
-| `INUTILIZADO` | Número inutilizado por evento | Mostrar como inutilizado |
+| `CANCELADO` | Documento cancelado por evento (tipo 1, aprobado por SIFEN) | Mostrar como cancelado |
+| `INUTILIZADO` | Número inutilizado por evento (tipo 2, aprobado por SIFEN) | Mostrar como inutilizado |
+
+`GET /invoices/{cdc}/status` incluye además `cancelado` (booleano) y `ultimoEvento`
+(resumen del evento más reciente registrado para ese CDC), y `GET /invoices/{cdc}/events`
+devuelve el historial completo. Ver [eventos-sifen.md](eventos-sifen.md) para el detalle
+de validaciones, plazos y qué hacer ante un evento `INDETERMINADO` (nunca reenviar).
 
 ---
 
@@ -88,6 +93,28 @@ Si el lote todavía no fue procesado por SIFEN, `?refresh=true` devuelve:
 
 Esto **no es un error** — significa que hay que esperar y reintentar. No marcar como rechazado.
 
+### Respuesta cuando el documento fue rechazado
+
+Además del estado, `/status` trae el motivo completo y si conviene reenviar (ver
+[motivo-rechazo-y-reenvio.md](motivo-rechazo-y-reenvio.md) para el detalle de cada campo):
+
+```json
+{
+  "estado": "RECHAZADO",
+  "codigoEstado": "1004",
+  "descripcionEstado": "La fecha y hora de la firma digital es adelantada",
+  "mensajes": [
+    { "codigo": "1004", "descripcion": "La fecha y hora de la firma digital es adelantada" }
+  ],
+  "reenviable": true,
+  "clasificacionReenvio": "AUTOMATICO",
+  "accionSugerida": "Reenviar con POST /invoices/{cdc}/resend — se corrige al retransmitir, sin cambiar datos."
+}
+```
+
+`descripcionEstado` sigue siendo el mensaje único de siempre (compatibilidad); `mensajes`
+es la lista completa cuando SIFEN devuelve más de uno (aprobado con observación).
+
 ### Estrategia de polling recomendada
 
 ```js
@@ -95,14 +122,20 @@ async function esperarAprobacion(cdc, maxIntentos = 20, intervaloMs = 30000) {
   for (let i = 0; i < maxIntentos; i++) {
     const { data } = await api.get(`/invoices/${cdc}/status?refresh=true`);
     const estado = data.data.estado;
-    const codigo = data.data.codigoEstado;
 
     if (["APROBADO", "APROBADO_CON_OBSERVACION"].includes(estado)) {
       return { aprobado: true, estado };
     }
 
     if (["RECHAZADO", "ERROR"].includes(estado)) {
-      return { aprobado: false, estado, descripcion: data.data.descripcionEstado };
+      return {
+        aprobado: false,
+        estado,
+        mensajes: data.data.mensajes,
+        reenviable: data.data.reenviable,
+        clasificacionReenvio: data.data.clasificacionReenvio,
+        accionSugerida: data.data.accionSugerida,
+      };
     }
 
     // PREPARADO, ENVIADO, o código 0361 (lote procesando) → esperar
@@ -210,9 +243,14 @@ async function prepararFactura(payload) {
 | `GET` | `/invoices/{cdc}/status` | Consultar estado sin llamar a SIFEN |
 | `GET` | `/invoices/{cdc}/status?refresh=true` | Consultar estado forzando verificación en SIFEN |
 | `POST` | `/invoices/{cdc}/resend-email` | Reenviar email de aprobación al cliente |
+| `POST` | `/invoices/{cdc}/resend` | Reenviar un documento RECHAZADO/ERROR a SIFEN con el mismo CDC (body opcional con payload corregido, ver [motivo-rechazo-y-reenvio.md](motivo-rechazo-y-reenvio.md)) |
+| `POST` | `/invoices/resend-rejected?codigo=1004` | Reenviar todos los RECHAZADO de la empresa con ese código SIFEN |
 | `POST` | `/invoices/kude` | Generar PDF KUDE del documento |
 | `POST` | `/invoices/kude/base64` | Generar PDF KUDE como base64 |
-| `POST` | `/invoices/events` | Cancelar, inutilizar, conformar, etc. |
+| `POST` | `/invoices/events` | Cancelar, inutilizar, conformar, etc. (ver [eventos-sifen.md](eventos-sifen.md)) |
+| `GET` | `/invoices/{cdc}/events` | Historial de eventos de un CDC |
+| `GET` | `/invoices/events` | Listado paginado de eventos (filtros tipo/estado/fecha) |
+| `POST` | `/invoices/events/{id}/reconcile` | Reconciliar un evento `INDETERMINADO` tras un timeout |
 
 ---
 

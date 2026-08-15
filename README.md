@@ -12,6 +12,7 @@ El aislamiento multi-tenant se mantiene por `companyId` (JWT/API Key).
 
 - [Guia de integracion frontend con Next.js](docs/frontend-integration-nextjs.md)
 - [Métodos de pago — Guía de integración para el ERP](docs/metodos-de-pago.md)
+- [Eventos SIFEN — cancelación, inutilización y eventos del receptor](docs/eventos-sifen.md)
 
 ## Requisitos
 
@@ -261,6 +262,9 @@ curl -X POST http://localhost:8000/auth/refresh \
 | `GET` | `/invoices/batch/{nroLote}` | Consulta estado de lote directamente a SIFEN |
 | `GET` | `/invoices/ruc/{ruc}` | Consulta datos de un RUC |
 | `POST` | `/invoices/events` | Envía evento (cancelación, inutilización, etc.) |
+| `GET` | `/invoices/{cdc}/events` | Historial de eventos registrados para un CDC |
+| `GET` | `/invoices/events` | Listado paginado de eventos (filtros `tipoEvento`, `estado`, `desde`, `hasta`) |
+| `POST` | `/invoices/events/{id}/reconcile` | Reconciliación bajo demanda de un evento `INDETERMINADO` |
 | `POST` | `/invoices/{cdc}/resend-email` | Reenvía email de factura aprobada al email del cliente |
 
 ### Estado del servicio de emisión síncrona
@@ -1355,19 +1359,24 @@ El monto total de las entregas de pago **debe coincidir** con el total del docum
 | `0300` | LOTE_RECIBIDO | Lote recibido correctamente |
 | `0301` | LOTE_RECHAZADO | Lote rechazado |
 | `0362` | LOTE_CONCLUIDO | Lote procesado y con detalle por CDC disponible |
+| `4000`-`4010` | (rechazo de cancelación) | Plazo de 48h vencido, DTE no aprobado, o conformidad previa del receptor. Ver `docs/eventos-sifen.md` |
+| `4066`-`4071` | (rechazo de inutilización) | Rango fuera del timbrado o número ya utilizado. Ver `docs/eventos-sifen.md` |
 
 ## Códigos de error del wrapper
 
 | Código | HTTP Status | Descripción |
 |--------|-------------|-------------|
-| `SIFEN_ERROR` | 502 | Error de comunicación o respuesta de SIFEN |
+| `SIFEN_ERROR` | 502 | Error de comunicación o respuesta de SIFEN (incluye eventos `INDETERMINADO` por timeout) |
 | `INVALID_REQUEST` | 400 | Argumento inválido en la solicitud |
 | `INVALID_JSON` | 400 | JSON del body malformado o tipos incorrectos |
 | `VALIDATION_ERROR` | 400 | Error de validación de campos |
 | `MISSING_FIELD` | 400 | Campo obligatorio nulo |
+| `EVENT_DUPLICATE` | 409 | Ya existe un evento vigente (enviado, indeterminado o aprobado) para el mismo CDC/rango |
 | `INTERNAL_ERROR` | 500 | Error interno no clasificado |
 
 ## Tipos de Evento (`tipoEvento`)
+
+> Ver [docs/eventos-sifen.md](docs/eventos-sifen.md) para la guía completa: persistencia, plazos, códigos, emisor vs receptor, y qué hacer ante un evento `INDETERMINADO`.
 
 | Código | Descripción | Campos obligatorios |
 |--------|-------------|---------------------|
@@ -1375,8 +1384,12 @@ El monto total de las entregas de pago **debe coincidir** con el total del docum
 | 2 | Inutilización | `timbrado`, `establecimiento`, `puntoExpedicion`, `numeroDesde`, `numeroHasta`, `tipoDocumento`, `motivo` |
 | 3 | Conformidad del receptor | `cdc`, `tipoConformidad` (1=Total, 2=Parcial), `fechaRecepcion` |
 | 4 | Disconformidad del receptor | `cdc`, `motivo` |
-| 5 | Desconocimiento del receptor | `cdc`, `motivo` + datos receptor |
-| 6 | Notificación de recepción | `cdc` + datos receptor + `totalGs` |
+| 5 | Desconocimiento del receptor | `cdc`, `motivo`, `fechaEmision`, `fechaRecepcion`, `nombreReceptor`, `receptorContribuyente` (+ `tipoDocIdentidad`/`numeroDocIdentidad` si no es contribuyente) |
+| 6 | Notificación de recepción | `cdc`, `fechaEmision`, `fechaRecepcion`, `nombreReceptor`, `receptorContribuyente`, `totalGs` |
+
+En los tipos 5 y 6, `rucReceptor` es opcional: si se omite se autocompleta con el RUC de la empresa autenticada; si se envía, debe coincidir con ese RUC (un tenant no puede registrar un evento de receptor a nombre de otra empresa).
+
+Desde la persistencia de eventos, el request se valida antes de llamar a SIFEN (motivo ≥15 caracteres, CDC de 44 dígitos con dígito verificador válido, plazo de 48h para cancelación, rango ≤1000 números para inutilización, etc.) — ver `docs/eventos-sifen.md` para el detalle completo.
 
 ### Estructura XML de eventos (v150) validada
 
@@ -1524,7 +1537,7 @@ sifen-wrapper/
 │   │   └── GlobalExceptionHandler.java
 │   ├── patch/
 │       ├── TgCamIVAPatched.java         # Parche: campo dBasExe en gCamIVA (NT13)
-│       ├── TgGroupTiEvtPatched.java     # Parche: estructura de eventos SIFEN v150
+│       ├── TgTimbPatched.java           # Parche: dNumTim con padding a 8 dígitos
 │       └── TgTotSubPatched.java         # Parche: totales del documento (gTotSub)
 ├── src/main/resources/
 │   ├── application.yml
