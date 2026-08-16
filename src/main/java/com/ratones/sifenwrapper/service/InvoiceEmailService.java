@@ -53,15 +53,17 @@ public class InvoiceEmailService {
         }
 
         String cliente = text(root.path("data").path("cliente").path("razonSocial"));
-        String subject = "Factura aprobada - CDC " + doc.getCdc();
+        String titulo = nombreDocumento(doc.getTipoDocumento());
+        String subject = titulo + " aprobada - CDC " + doc.getCdc();
         String html = buildHtmlBody(
+                titulo,
                 cliente,
                 doc.getCdc(),
                 doc.getEstado(),
                 doc.getSifenCodigo(),
                 doc.getSifenMensaje(),
                 doc.getQrUrl());
-        String text = buildTextBody(doc.getCdc(), doc.getEstado(), doc.getSifenCodigo(), doc.getSifenMensaje(), doc.getQrUrl());
+        String text = buildTextBody(titulo, doc.getCdc(), doc.getEstado(), doc.getSifenCodigo(), doc.getSifenMensaje(), doc.getQrUrl());
 
         byte[] kude = generarKudeSilencioso(root, doc.getCdc(), doc.getQrUrl(), doc.getEstado(),
                 doc.getSifenCodigo(), doc.getSifenMensaje());
@@ -84,15 +86,17 @@ public class InvoiceEmailService {
         }
 
         String cliente = request.getData().getCliente().getRazonSocial();
-        String subject = "Factura aprobada - CDC " + response.getCdc();
+        String titulo = nombreDocumento((short) request.getData().getTipoDocumento());
+        String subject = titulo + " aprobada - CDC " + response.getCdc();
         String html = buildHtmlBody(
+                titulo,
                 cliente,
                 response.getCdc(),
                 response.getEstado(),
                 response.getCodigoEstado(),
                 response.getDescripcionEstado(),
                 response.getQrUrl());
-        String text = buildTextBody(response.getCdc(), response.getEstado(), response.getCodigoEstado(),
+        String text = buildTextBody(titulo, response.getCdc(), response.getEstado(), response.getCodigoEstado(),
                 response.getDescripcionEstado(), response.getQrUrl());
 
         byte[] kude = generarKudeSilenciosoDesdeRequest(request, response);
@@ -281,7 +285,21 @@ public class InvoiceEmailService {
         return trimmed.isBlank() ? null : trimmed;
     }
 
-    private String buildHtmlBody(String cliente,
+    /** 1=Factura, 4=Autofactura, 5=Nota de Crédito, 6=Nota de Débito, 7=Nota de Remisión. */
+    private String nombreDocumento(Short tipoDocumento) {
+        if (tipoDocumento == null) return "Factura";
+        return switch (tipoDocumento.intValue()) {
+            case 1 -> "Factura";
+            case 4 -> "Autofactura";
+            case 5 -> "Nota de Crédito";
+            case 6 -> "Nota de Débito";
+            case 7 -> "Nota de Remisión";
+            default -> "Documento electrónico";
+        };
+    }
+
+    private String buildHtmlBody(String tituloDocumento,
+                                 String cliente,
                                  String cdc,
                                  String estado,
                                  String codigo,
@@ -290,10 +308,10 @@ public class InvoiceEmailService {
         String nombre = (cliente == null || cliente.isBlank()) ? "cliente" : cliente;
         return """
                 <html>
-                  <body style=\"font-family: Arial, sans-serif; color: #111;\"> 
-                    <h2>Factura aprobada por SIFEN</h2>
+                  <body style=\"font-family: Arial, sans-serif; color: #111;\">
+                    <h2>%s aprobada por SIFEN</h2>
                     <p>Hola %s,</p>
-                    <p>Tu factura fue procesada correctamente.</p>
+                    <p>Tu documento fue procesado correctamente.</p>
                     <ul>
                       <li><strong>CDC:</strong> %s</li>
                       <li><strong>Estado:</strong> %s</li>
@@ -305,6 +323,7 @@ public class InvoiceEmailService {
                   </body>
                 </html>
                 """.formatted(
+                escapeHtml(tituloDocumento),
                 escapeHtml(nombre),
                 safe(cdc),
                 safe(estado),
@@ -314,8 +333,8 @@ public class InvoiceEmailService {
         );
     }
 
-    private String buildTextBody(String cdc, String estado, String codigo, String mensaje, String qrUrl) {
-        return "Factura aprobada por SIFEN\n"
+    private String buildTextBody(String tituloDocumento, String cdc, String estado, String codigo, String mensaje, String qrUrl) {
+        return tituloDocumento + " aprobada por SIFEN\n"
                 + "CDC: " + safe(cdc) + "\n"
                 + "Estado: " + safe(estado) + "\n"
                 + "Codigo SIFEN: " + safe(codigo) + "\n"

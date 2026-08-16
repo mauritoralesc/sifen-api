@@ -125,6 +125,19 @@ public class InvoiceController {
         return ResponseEntity.ok(SifenApiResponse.ok(response));
     }
 
+    /**
+     * Lista las Notas de Crédito (tipoDocumento 5) emitidas por esta empresa que
+     * referencian el CDC dado (grupo H / documentoAsociado del request de la NC).
+     */
+    @GetMapping("/{cdc}/credit-notes")
+    public ResponseEntity<SifenApiResponse<List<NotaCreditoResumenDTO>>> listarNotasCredito(
+            @PathVariable String cdc) {
+
+        log.info("GET /invoices/{}/credit-notes", cdc);
+        List<NotaCreditoResumenDTO> response = invoiceService.listarNotasCredito(cdc);
+        return ResponseEntity.ok(SifenApiResponse.ok(response));
+    }
+
     @PostMapping("/{cdc}/resend-email")
     public ResponseEntity<SifenApiResponse<Map<String, String>>> reenviarEmailFactura(
             @PathVariable String cdc) {

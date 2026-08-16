@@ -205,7 +205,7 @@ async function prepararFactura(payload) {
 |---|---|
 | Reintento por timeout/error de red | Reutilizar el CDC existente (ver flujo arriba) |
 | Documento en `RECHAZADO` por datos inválidos | Corregir datos y usar el **siguiente número correlativo** |
-| Documento en `APROBADO` con datos incorrectos | Emitir **Nota de Crédito** (`tipoDocumento: 5`) + nuevo documento con número siguiente |
+| Documento en `APROBADO` con datos incorrectos | Emitir **Nota de Crédito** (`tipoDocumento: 5`) + nuevo documento con número siguiente — ver [notas-de-credito.md](notas-de-credito.md) |
 
 > **Nunca reusar un número de factura aprobado.** El correlativo es único por timbrado + establecimiento + punto y su reutilización constituye una irregularidad fiscal ante la DNIT.
 

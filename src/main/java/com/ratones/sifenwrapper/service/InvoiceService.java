@@ -19,6 +19,7 @@ import com.roshka.sifen.core.types.*;
 import com.roshka.sifen.internal.ctx.GenerationCtx;
 import com.roshka.sifen.internal.util.SifenUtil;
 import com.ratones.sifenwrapper.dto.request.ClienteDTO;
+import com.ratones.sifenwrapper.dto.request.DataDTO;
 import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
 import com.ratones.sifenwrapper.dto.request.ItemDTO;
 import com.ratones.sifenwrapper.dto.request.KudeRequest;
@@ -31,6 +32,7 @@ import com.ratones.sifenwrapper.mapper.SifenMapper;
 import com.ratones.sifenwrapper.repository.ElectronicDocumentRepository;
 import com.ratones.sifenwrapper.repository.SifenEventRepository;
 import com.ratones.sifenwrapper.security.TenantContext;
+import com.ratones.sifenwrapper.util.CdcUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -60,6 +62,7 @@ public class InvoiceService {
     private final InvoiceEmailService invoiceEmailService;
     private final ElectronicDocumentRepository electronicDocumentRepository;
     private final SifenEventRepository sifenEventRepository;
+    private final NotaCreditoValidator notaCreditoValidator;
     private final ObjectMapper objectMapper;
 
     // ─── Emisión DE (Recepción Síncrona) ──────────────────────────────────────
@@ -69,6 +72,7 @@ public class InvoiceService {
             // Auto-fill params desde la config de la empresa si no vienen en el request
             request.setParams(resolveParams(request.getParams()));
             validarReglasReceptor(request);
+            validarNotaCreditoSiCorresponde(request);
 
             log.info("Iniciando emisión de DE - Establecimiento: {}, Punto: {}, Número: {}",
                     request.getData().getEstablecimiento(),
@@ -106,6 +110,7 @@ public class InvoiceService {
         try {
             request.setParams(resolveParams(request.getParams()));
             validarReglasReceptor(request);
+            validarNotaCreditoSiCorresponde(request);
 
             log.info("[PREPARE] Preparando DE - Establecimiento: {}, Punto: {}, Número: {}",
                     request.getData().getEstablecimiento(),
@@ -156,6 +161,10 @@ public class InvoiceService {
                     .xmlFirmado(xmlFirmado)
                     .qrUrl(qrUrl)
                     .requestData(requestJson)
+                    .moneda(resolveMoneda(request.getData()))
+                    .montoTotal(resolveMontoTotal(de))
+                    .cdcAsociado(resolveCdcAsociado(request.getData()))
+                    .motivoEmision(resolveMotivoEmision(request.getData()))
                     .build();
             try {
                 electronicDocumentRepository.save(doc);
@@ -893,6 +902,73 @@ public class InvoiceService {
                 .build();
     }
 
+    /** Validación específica de Nota de Crédito/Débito (tipoDocumento 5/6); no-op para el resto. */
+    private void validarNotaCreditoSiCorresponde(EmitirFacturaRequest request) {
+        if (request == null || request.getData() == null) {
+            return;
+        }
+        int tipo = request.getData().getTipoDocumento();
+        if (tipo != 5 && tipo != 6) {
+            return;
+        }
+        notaCreditoValidator.validar(request, TenantContext.get());
+    }
+
+    private String resolveMoneda(DataDTO data) {
+        return data.getMoneda() != null && !data.getMoneda().isBlank() ? data.getMoneda() : "PYG";
+    }
+
+    /** F014 dTotGralOpe: solo disponible después de generarXml (la librería lo calcula ahí). */
+    private BigDecimal resolveMontoTotal(DocumentoElectronico de) {
+        if (de.getgTotSub() == null) {
+            return null;
+        }
+        return de.getgTotSub().getdTotGralOpe();
+    }
+
+    /** Solo para asociación electrónica (grupo H, tipoDocumentoAsociado=1); null en el resto de los casos. */
+    private String resolveCdcAsociado(DataDTO data) {
+        if (data.getDocumentoAsociado() == null) {
+            return null;
+        }
+        Integer tipo = data.getDocumentoAsociado().getTipoDocumentoAsociado();
+        return tipo != null && tipo == 1 ? data.getDocumentoAsociado().getCdcAsociado() : null;
+    }
+
+    private Short resolveMotivoEmision(DataDTO data) {
+        return data.getNotaCreditoDebito() != null ? (short) data.getNotaCreditoDebito().getMotivo() : null;
+    }
+
+    /** NC (tipo 5) emitidas por esta empresa que referencian el CDC de la factura dada. */
+    public List<NotaCreditoResumenDTO> listarNotasCredito(String cdcFactura) {
+        Long companyId = TenantContext.get();
+        CdcUtil.validarEstructural(cdcFactura);
+        return electronicDocumentRepository
+                .findByCompanyIdAndCdcAsociadoAndTipoDocumentoOrderByCreatedAtDesc(companyId, cdcFactura, (short) 5)
+                .stream()
+                .map(this::toNotaCreditoResumen)
+                .toList();
+    }
+
+    private NotaCreditoResumenDTO toNotaCreditoResumen(ElectronicDocument doc) {
+        TiMotEmi motivo = doc.getMotivoEmision() != null ? TiMotEmi.getByVal(doc.getMotivoEmision()) : null;
+        return NotaCreditoResumenDTO.builder()
+                .cdc(doc.getCdc())
+                .establecimiento(doc.getEstablecimiento())
+                .punto(doc.getPunto())
+                .numero(doc.getNumero())
+                .estado(doc.getEstado())
+                .motivoEmision(doc.getMotivoEmision())
+                .motivoDescripcion(motivo != null ? motivo.getDescripcion() : null)
+                .moneda(doc.getMoneda())
+                .montoTotal(doc.getMontoTotal())
+                .sifenCodigo(doc.getSifenCodigo())
+                .sifenMensaje(doc.getSifenMensaje())
+                .createdAt(doc.getCreatedAt())
+                .processedAt(doc.getProcessedAt())
+                .build();
+    }
+
     private void validarReglasReceptor(EmitirFacturaRequest request) {
         if (request == null || request.getData() == null) {
             return;
@@ -942,7 +1018,8 @@ public class InvoiceService {
         return cliente.getDocumentoTipo();
     }
 
-    private BigDecimal calcularTotalOperacion(List<ItemDTO> items) {
+    /** Paquete-visible y estática: reutilizada por NotaCreditoValidator para la pre-validación 2417. */
+    static BigDecimal calcularTotalOperacion(List<ItemDTO> items) {
         if (items == null || items.isEmpty()) {
             return BigDecimal.ZERO;
         }

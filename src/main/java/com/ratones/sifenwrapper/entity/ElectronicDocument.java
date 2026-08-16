@@ -5,6 +5,7 @@ import lombok.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -56,6 +57,21 @@ public class ElectronicDocument {
 
     @Column(name = "sifen_mensaje", columnDefinition = "TEXT")
     private String sifenMensaje;
+
+    /** CDC del documento que esta NC/ND ajusta (grupo H, solo asociación electrónica). */
+    @Column(name = "cdc_asociado", length = 44)
+    private String cdcAsociado;
+
+    @Column(length = 3)
+    private String moneda;
+
+    /** F014 dTotGralOpe, leído del DE luego de generarXml. Null en filas legacy (pre-V17). */
+    @Column(name = "monto_total", precision = 23, scale = 8)
+    private BigDecimal montoTotal;
+
+    /** E401 iMotEmi (solo NC/ND). */
+    @Column(name = "motivo_emision")
+    private Short motivoEmision;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "request_data", columnDefinition = "jsonb")

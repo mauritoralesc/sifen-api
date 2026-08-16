@@ -29,4 +29,5 @@ public class DataDTO {
     private AutoFacturaDTO autoFactura;
     private RemisionDTO remision;
     private NotaCreditoDebitoDTO notaCreditoDebito;
+    private DocumentoAsociadoDTO documentoAsociado;
 }

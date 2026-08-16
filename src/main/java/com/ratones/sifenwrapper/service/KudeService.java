@@ -68,6 +68,11 @@ public class KudeService {
 
             document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
 
+            // Documento asociado (grupo H, solo NC/ND)
+            addDocumentoAsociado(document, request);
+
+            document.add(new Paragraph(" ", new Font(Font.HELVETICA, 3)));
+
             // Tabla de items con totales integrados
             addTablaItems(document, request);
 
@@ -224,10 +229,9 @@ public class KudeService {
         String nombreReceptor = innominado ? "Sin Nombre" : nulo(cliente != null ? cliente.getRazonSocial() : null);
         String docReceptor = innominado ? "Innominado" : nulo(resolveDocumentoCliente(cliente));
 
-        // Condición de venta: checkboxes
-        boolean esContado = condicion == null || condicion.getTipo() == 1;
-        String chkContado = esContado ? "[X] Contado" : "[ ] Contado";
-        String chkCredito = !esContado ? "[X] Crédito" : "[ ] Crédito";
+        // NC/ND (5/6) no tienen condición de venta: mostrar el motivo de emisión (E401)
+        // en su lugar. "[X] Contado" sería espurio, ya que condicion siempre es null ahí.
+        boolean esNotaCreditoDebito = data.getTipoDocumento() == 5 || data.getTipoDocumento() == 6;
 
         // Tabla principal de info emisión: 2 columnas
         PdfPTable table = new PdfPTable(2);
@@ -240,10 +244,17 @@ public class KudeService {
         leftCell.setBorderColor(BORDER_COLOR);
         leftCell.setPadding(5);
 
-        // Condición checkboxes
-        Paragraph condPara = new Paragraph();
-        condPara.add(new Chunk(chkContado + "   " + chkCredito, BOLD_FONT));
-        leftCell.addElement(condPara);
+        if (esNotaCreditoDebito) {
+            leftCell.addElement(new Paragraph("Motivo de emisión: " + resolverMotivoEmision(data), BOLD_FONT));
+        } else {
+            // Condición de venta: checkboxes
+            boolean esContado = condicion == null || condicion.getTipo() == 1;
+            String chkContado = esContado ? "[X] Contado" : "[ ] Contado";
+            String chkCredito = !esContado ? "[X] Crédito" : "[ ] Crédito";
+            Paragraph condPara = new Paragraph();
+            condPara.add(new Chunk(chkContado + "   " + chkCredito, BOLD_FONT));
+            leftCell.addElement(condPara);
+        }
 
         leftCell.addElement(new Paragraph("Fecha Emisión: " + formatearFecha(data.getFecha()), NORMAL_FONT));
         leftCell.addElement(new Paragraph("Tipo Transacción: " + resolverTipoTransaccion(data.getTipoTransaccion()), SMALL_FONT));
@@ -477,6 +488,39 @@ public class KudeService {
         doc.add(table);
     }
 
+    /** Grupo H: documento que la NC/ND ajusta. No-op si el request no trae documentoAsociado. */
+    private void addDocumentoAsociado(Document doc, KudeRequest req) throws DocumentException {
+        DocumentoAsociadoDTO asociado = req.getData().getDocumentoAsociado();
+        if (asociado == null || asociado.getTipoDocumentoAsociado() == null) return;
+
+        PdfPTable table = new PdfPTable(1);
+        table.setWidthPercentage(100);
+        table.setSpacingBefore(4);
+
+        PdfPCell cell = new PdfPCell();
+        cell.setBorder(Rectangle.BOX);
+        cell.setBorderColor(BORDER_COLOR);
+        cell.setPadding(4);
+        cell.addElement(new Paragraph("Documento Asociado", BOLD_FONT));
+
+        if (asociado.getTipoDocumentoAsociado() == 1) {
+            cell.addElement(new Paragraph("CDC: " + formatearCdc(asociado.getCdcAsociado()),
+                    new Font(Font.COURIER, 8, Font.NORMAL, Color.BLACK)));
+        } else if (asociado.getTipoDocumentoAsociado() == 2) {
+            String numero = String.format("%s-%s-%s",
+                    nulo(asociado.getEstablecimientoAsociado()),
+                    nulo(asociado.getPuntoAsociado()),
+                    nulo(asociado.getNumeroAsociado()));
+            cell.addElement(new Paragraph(
+                    "Comprobante impreso — Timbrado: " + nulo(asociado.getTimbradoAsociado()) +
+                    "  Nº: " + numero + "  Fecha: " + formatearFecha(asociado.getFechaEmisionAsociado()),
+                    SMALL_FONT));
+        }
+
+        table.addCell(cell);
+        doc.add(table);
+    }
+
     private void addQrYCdc(Document doc, PdfWriter writer, KudeRequest req) throws DocumentException {
         PdfPTable table = new PdfPTable(2);
         table.setWidthPercentage(100);
@@ -651,6 +695,21 @@ public class KudeService {
 
     private String nulo(String value, String defaultValue) {
         return value != null && !value.isBlank() ? value : defaultValue;
+    }
+
+    private String resolverMotivoEmision(DataDTO data) {
+        if (data.getNotaCreditoDebito() == null) return "-";
+        return switch (data.getNotaCreditoDebito().getMotivo()) {
+            case 1 -> "Devolución y ajuste de precios";
+            case 2 -> "Devolución";
+            case 3 -> "Descuento";
+            case 4 -> "Bonificación";
+            case 5 -> "Crédito incobrable";
+            case 6 -> "Recupero de costo";
+            case 7 -> "Recupero de gasto";
+            case 8 -> "Ajuste de precio";
+            default -> String.valueOf(data.getNotaCreditoDebito().getMotivo());
+        };
     }
 
     private String resolverTipoDocumento(int tipo) {

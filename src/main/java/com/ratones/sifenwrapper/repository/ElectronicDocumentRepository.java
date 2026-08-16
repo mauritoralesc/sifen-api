@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -77,4 +78,20 @@ public interface ElectronicDocumentRepository extends JpaRepository<ElectronicDo
             @Param("tipoDocumento") Short tipoDocumento,
             @Param("desde") String desde,
             @Param("hasta") String hasta);
+
+    /**
+     * Suma el monto de las Notas de Crédito (tipo 5) que ya "consumen" el cupo de una
+     * factura, para la pre-validación local de la regla SIFEN 2417. Incluye PREPARADO
+     * y ENVIADO (no solo APROBADO) a propósito: es conservador ante NCs concurrentes
+     * todavía no confirmadas por SIFEN, que igualmente competirían por el mismo cupo.
+     */
+    @Query("SELECT COALESCE(SUM(e.montoTotal), 0) FROM ElectronicDocument e " +
+           "WHERE e.companyId = :companyId AND e.cdcAsociado = :cdcAsociado " +
+           "AND e.tipoDocumento = 5 AND e.estado NOT IN ('RECHAZADO', 'ERROR', 'CANCELADO')")
+    BigDecimal sumMontoAprobadoNotasCredito(
+            @Param("companyId") Long companyId,
+            @Param("cdcAsociado") String cdcAsociado);
+
+    List<ElectronicDocument> findByCompanyIdAndCdcAsociadoAndTipoDocumentoOrderByCreatedAtDesc(
+            Long companyId, String cdcAsociado, Short tipoDocumento);
 }

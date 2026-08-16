@@ -79,6 +79,15 @@ public class SifenMapper {
         TgDtipDE dtipDE = buildDtipDE(data);
         de.setgDtipDE(dtipDE);
 
+        // Grupo H (documento asociado): obligatorio para NC/ND (tipoDocumento 5/6).
+        // La librería itera gCamDEAsocList sin null-check para iTiDE ∈ {4,5,6}, por lo
+        // que dejarlo null ahí sería NPE — NotaCreditoValidator garantiza su presencia
+        // antes de llegar a este mapeo para esos tipos.
+        List<TgCamDEAsoc> camDEAsocList = buildCamDEAsocList(data);
+        if (camDEAsocList != null) {
+            de.setgCamDEAsocList(camDEAsocList);
+        }
+
         // Subtotales (obligatorio – la librería calcula automáticamente en setupSOAPElements)
         TgTotSub totSub = new TgTotSubPatched();
         de.setgTotSub(totSub);
@@ -353,6 +362,36 @@ public class SifenMapper {
             camNCDE.setiMotEmi(TiMotEmi.getByVal((short) data.getNotaCreditoDebito().getMotivo()));
         }
         return camNCDE;
+    }
+
+    // ─── Grupo H: documento asociado (NC/ND) ───────────────────────────────────
+
+    /**
+     * Construye gCamDEAsoc a partir de DataDTO.documentoAsociado. Sin validar: esto
+     * también corre en la reconstrucción del BatchSenderService desde requestData ya
+     * validado en /prepare. Devuelve null si no viene (tipos que no lo requieren).
+     */
+    private List<TgCamDEAsoc> buildCamDEAsocList(DataDTO data) {
+        DocumentoAsociadoDTO asociado = data.getDocumentoAsociado();
+        if (asociado == null) {
+            return null;
+        }
+
+        TgCamDEAsoc camDEAsoc = new TgCamDEAsoc();
+        camDEAsoc.setiTipDocAso(TiTipDocAso.getByVal(asociado.getTipoDocumentoAsociado().shortValue()));
+
+        if (asociado.getTipoDocumentoAsociado() == 1) {
+            camDEAsoc.setdCdCDERef(asociado.getCdcAsociado());
+        } else if (asociado.getTipoDocumentoAsociado() == 2) {
+            camDEAsoc.setdNTimDI(asociado.getTimbradoAsociado());
+            camDEAsoc.setdEstDocAso(asociado.getEstablecimientoAsociado());
+            camDEAsoc.setdPExpDocAso(asociado.getPuntoAsociado());
+            camDEAsoc.setdNumDocAso(asociado.getNumeroAsociado());
+            camDEAsoc.setiTipoDocAso(TiTIpoDoc.getByVal(asociado.getTipoComprobanteAsociado().shortValue()));
+            camDEAsoc.setdFecEmiDI(LocalDate.parse(asociado.getFechaEmisionAsociado(), DATE_FMT));
+        }
+
+        return List.of(camDEAsoc);
     }
 
     private TgCamNRE buildCamNRE(DataDTO data) {

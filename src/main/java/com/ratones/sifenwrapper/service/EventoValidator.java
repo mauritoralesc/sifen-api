@@ -8,6 +8,7 @@ import com.ratones.sifenwrapper.entity.ElectronicDocument;
 import com.ratones.sifenwrapper.entity.SifenEvent;
 import com.ratones.sifenwrapper.repository.ElectronicDocumentRepository;
 import com.ratones.sifenwrapper.repository.SifenEventRepository;
+import com.ratones.sifenwrapper.util.CdcUtil;
 import com.roshka.sifen.internal.util.SifenUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -134,9 +135,7 @@ public class EventoValidator {
     }
 
     private void validarCdcPerteneceAEmisor(String cdc, Company company) {
-        String rucCdc = cdc.substring(2, 10);
-        String rucEsperado = SifenUtil.leftPad(soloDigitos(company.getRuc()), '0', 8);
-        if (!rucCdc.equals(rucEsperado)) {
+        if (!CdcUtil.perteneceAEmisor(cdc, company.getRuc())) {
             throw new IllegalArgumentException(
                     "El CDC no pertenece a esta empresa o no fue emitido a través de este wrapper. " +
                     "Una cancelación solo puede solicitarla el emisor.");
@@ -302,14 +301,7 @@ public class EventoValidator {
     }
 
     private void validarCdcEstructural(String cdc) {
-        String base = cdc.substring(0, 43);
-        String dvEsperado = SifenUtil.generateDv(base);
-        String dvRecibido = cdc.substring(43);
-        if (!dvEsperado.equals(dvRecibido)) {
-            throw new IllegalArgumentException(
-                    "El dígito verificador del CDC es inválido (recibido " + dvRecibido +
-                    ", esperado " + dvEsperado + "). Verifique que el CDC esté completo y sin errores de transcripción.");
-        }
+        CdcUtil.validarEstructural(cdc);
     }
 
     private void validarNoFutura(LocalDateTime fecha, String campo) {
