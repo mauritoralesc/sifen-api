@@ -154,12 +154,27 @@ async function reenviarEmailFactura(cdc) {
 
 El correo que recibe el cliente incluye:
 
-- **Asunto:** `Factura aprobada - CDC <cdc>`
+- **Asunto:** `¡Su documento electrónico está listo!`
 - **Remitente:** Configurado en el servidor (`fromName <fromEmail>`, ej: `SYNCTEMA <no-reply@synctema.com>`)
 - **Destinatario:** `data.cliente.email` del request original de emisión
 - **CC (opcional):** `data.cliente.emailCc` del request original (string separado por comas en la respuesta de reenvío)
 - **Adjunto:** KUDE en formato PDF (`kude-<cdc>.pdf`)
-- **Cuerpo HTML y texto plano** con CDC, estado, código SIFEN y URL del QR
+- **Cuerpo HTML y texto plano:**
+
+  ```text
+  ¡Hola, <razón social del cliente>!
+
+  Te enviamos este correo para informarte que tu Factura Electrónica fue procesada correctamente.
+
+  * CDC: <cdc>
+
+  ¡Descárgala para poder visualizarla!
+  QR: Ver comprobante   (enlace al QR de eKuatia)
+
+  Este correo fue generado automáticamente por Ratones.dev
+  ```
+
+  "Factura Electrónica" se reemplaza por el tipo de documento (Nota de Crédito Electrónica, etc.).
 
 El correo es idéntico al que se envía automáticamente tras la aprobación.
 

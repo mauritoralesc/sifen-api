@@ -18,7 +18,6 @@ import com.roshka.sifen.core.fields.response.de.TxContenDE;
 import com.roshka.sifen.core.types.*;
 import com.roshka.sifen.internal.ctx.GenerationCtx;
 import com.roshka.sifen.internal.util.SifenUtil;
-import com.ratones.sifenwrapper.dto.request.ClienteDTO;
 import com.ratones.sifenwrapper.dto.request.DataDTO;
 import com.ratones.sifenwrapper.dto.request.EmitirFacturaRequest;
 import com.ratones.sifenwrapper.dto.request.ItemDTO;
@@ -52,7 +51,6 @@ import java.util.regex.Pattern;
 public class InvoiceService {
 
     private static final ZoneId PY_ZONE = ZoneId.of("America/Asuncion");
-    private static final BigDecimal MONTO_MAX_INNOMINADO = new BigDecimal("60000000");
     private static final String DEFAULT_RESEND_SIFEN_CODIGO = "1004";
     private static final List<String> ESTADOS_REENVIABLES = List.of("RECHAZADO", "ERROR");
 
@@ -63,6 +61,7 @@ public class InvoiceService {
     private final ElectronicDocumentRepository electronicDocumentRepository;
     private final SifenEventRepository sifenEventRepository;
     private final NotaCreditoValidator notaCreditoValidator;
+    private final ReceptorValidator receptorValidator;
     private final ObjectMapper objectMapper;
 
     // ─── Emisión DE (Recepción Síncrona) ──────────────────────────────────────
@@ -975,27 +974,7 @@ public class InvoiceService {
         }
 
         validarItemsDocumento(request.getData().getItems());
-
-        if (request.getData().getCliente() == null) {
-            return;
-        }
-
-        ClienteDTO cliente = request.getData().getCliente();
-        Integer tipoDocReceptor = resolveTipoDocumentoReceptor(cliente);
-
-        // iNatRec = 2 (No Contribuyente): no debe enviarse RUC del receptor.
-        if (!cliente.isContribuyente() && cliente.getRuc() != null && !cliente.getRuc().isBlank()) {
-            throw new IllegalArgumentException("Para no contribuyente no debe informarse RUC del receptor");
-        }
-
-        // Innominado (iTipIDRec=5): permitido solo para total < 60.000.000.
-        if (tipoDocReceptor != null && tipoDocReceptor == 5) {
-            BigDecimal total = calcularTotalOperacion(request.getData().getItems());
-            if (total.compareTo(MONTO_MAX_INNOMINADO) >= 0) {
-                throw new IllegalArgumentException(
-                        "Factura innominada no permitida para montos >= 60.000.000 Gs (regla SIFEN 1321)");
-            }
-        }
+        receptorValidator.validar(request.getData());
     }
 
     private void validarItemsDocumento(List<ItemDTO> items) {
@@ -1003,19 +982,6 @@ public class InvoiceService {
             throw new IllegalArgumentException(
                     "El documento debe incluir al menos un item en data.items.");
         }
-    }
-
-    private Integer resolveTipoDocumentoReceptor(ClienteDTO cliente) {
-        if (cliente.getITipIDRec() != null) {
-            return cliente.getITipIDRec();
-        }
-        if (cliente.getTipoDocumentoIdentidad() != null) {
-            return cliente.getTipoDocumentoIdentidad();
-        }
-        if (cliente.getTipoDocumento() != null) {
-            return cliente.getTipoDocumento();
-        }
-        return cliente.getDocumentoTipo();
     }
 
     /** Paquete-visible y estática: reutilizada por NotaCreditoValidator para la pre-validación 2417. */
@@ -1047,7 +1013,10 @@ public class InvoiceService {
                         .descripcionEstado(respuesta.getdMsgRes())
                         .estado(resolverEstado(respuesta.getdCodRes()));
                 if (respuesta.getxContRUC() != null) {
-                    builder.razonSocial(respuesta.getxContRUC().getdRazCons());
+                    builder.razonSocial(respuesta.getxContRUC().getdRazCons())
+                            .estadoRuc(respuesta.getxContRUC().getdCodEstCons())
+                            .estadoRucDescripcion(respuesta.getxContRUC().getdDesEstCons())
+                            .facturadorElectronico(respuesta.getxContRUC().getdRUCFactElec());
                 }
             }
         }

@@ -166,6 +166,7 @@ Contado/Crédito (que no aplican, la NC no tiene grupo de condición), y agrega 
 sección "Documento Asociado" con el CDC o los datos del comprobante impreso. Ver
 [kude.md](kude.md) para el resto del layout, que es idéntico al de una factura.
 
-El correo de aprobación automática ajusta el asunto y el cuerpo según el tipo de
-documento ("Nota de Crédito aprobada - CDC ...", etc.) — ver
+El correo de aprobación automática usa el mismo asunto para todos los tipos
+("¡Su documento electrónico está listo!") y nombra el tipo de documento en el cuerpo
+("tu Nota de Crédito Electrónica fue procesada correctamente") — ver
 [correo-electronico-y-api-key.md](correo-electronico-y-api-key.md).

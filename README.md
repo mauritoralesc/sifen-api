@@ -260,7 +260,7 @@ curl -X POST http://localhost:8000/auth/refresh \
 | `POST` | `/invoices/kude/base64` | Genera KUDE como base64 en JSON |
 | `GET` | `/invoices/{cdc}` | Consulta DE por CDC directamente a SIFEN |
 | `GET` | `/invoices/batch/{nroLote}` | Consulta estado de lote directamente a SIFEN |
-| `GET` | `/invoices/ruc/{ruc}` | Consulta datos de un RUC |
+| `GET` | `/invoices/ruc/{ruc}` | Consulta datos de un RUC: `ruc`, `dv`, `razonSocial`, `estadoRuc` (ACT/SUS/SAD/BLQ/CAN/CDE — con SUS/CAN/CDE SIFEN rechaza B2B/B2G, regla 1308), `estadoRucDescripcion`, `facturadorElectronico` (S/N) |
 | `POST` | `/invoices/events` | Envía evento (cancelación, inutilización, etc.) |
 | `GET` | `/invoices/{cdc}/events` | Historial de eventos registrados para un CDC |
 | `GET` | `/invoices/events` | Listado paginado de eventos (filtros `tipoEvento`, `estado`, `desde`, `hasta`) |
@@ -374,6 +374,18 @@ curl -X POST http://localhost:8000/invoices/prepare \
 
 > **Nota:** `params` es opcional si la empresa tiene emisor configurado vía `PUT /companies/{id}/emisor`.
 
+#### Reglas del receptor (`data.cliente`)
+
+`ReceptorValidator` prevalida en `prepare`, `emit`, lote y `resend` las reglas del grupo receptor (Manual Técnico v150 y NT 23) y responde `400 INVALID_REQUEST` con el código SIFEN en el mensaje, en lugar de preparar un DE que SIFEN rechazaría (o que fallaba con un error interno al generar el XML):
+
+| Receptor | `contribuyente` | `tipoOperacion` | `tipoContribuyente` | `ruc` | `iTipIDRec` / `dNumIDRec` |
+|---|---|---|---|---|---|
+| Con RUC (empresa o persona) | `true` | `1` (B2B) o `3` (B2G) | `1` Persona Física / `2` Persona Jurídica — obligatorio (1302) | obligatorio, DV módulo 11 (1304/1309) | no aplica |
+| Persona sin RUC | `false` | `2` (B2C) — B2B/B2G se rechaza (1300) | no aplica | no enviar (1305) | obligatorio (1310) |
+| Innominado | `false` | `2` (B2C) (1333) | no aplica | no enviar | `5` / `"0"`; total < 60.000.000 (1321); no en NC/ND/NR (1331) |
+
+Los campos que no aplican a la naturaleza del receptor (p. ej. `tipoContribuyente` en un no contribuyente) se ignoran: no se informan en el XML.
+
 #### Caso no contribuyente (B2C) e innominado
 
 Cuando el cliente no tiene RUC válido (o no desea identificarse), emitir como no contribuyente con operación B2C:
@@ -467,11 +479,9 @@ Comportamiento implementado:
 
 Contenido del correo:
 
-- Asunto con CDC del documento.
-- Estado/código/mensaje de SIFEN.
-- Enlace QR del comprobante.
-
-> Nota: actualmente el correo se envía en formato HTML/texto, sin adjunto PDF KUDE.
+- Asunto: `¡Su documento electrónico está listo!`.
+- Saludo al cliente, tipo de documento y CDC.
+- Enlace QR del comprobante y KUDE adjunto.
 
 #### Reenvío manual por CDC
 

@@ -57,6 +57,7 @@ El KUDE (Constancia de Documento Electrónico) es la representación gráfica en
 | `moneda`            | string   | No        | Moneda. Default `PYG`                                |
 | `cajero`            | string   | No        | Nombre del cajero (aparece en el KUDE si se envía)   |
 | `socio`             | string   | No        | Número o nombre del socio (aparece en el KUDE)       |
+| `observacion`       | string   | No        | Nota libre impresa al pie, debajo de la caja del QR (ej. leyendas legales del emisor). No se envía a SIFEN |
 | `cliente`           | object   | Sí        | Datos del receptor (ver sección siguiente)           |
 | `condicion`         | object   | Sí        | Condición de venta y pagos                           |
 | `items`             | array    | Sí        | Ítems del documento                                  |
@@ -98,7 +99,7 @@ El KUDE (Constancia de Documento Electrónico) es la representación gráfica en
 | `entregas` | array | Lista de medios de pago (ver sección)   |
 | `credito`  | object| Datos del crédito (si tipo=2)           |
 
-El KUDE muestra automáticamente los checkboxes `[X] Contado  [ ] Crédito` según el valor de `tipo`.
+El KUDE marca con una `X` la casilla "Contado" o "Crédito" según el valor de `tipo`. Para crédito, la línea "Cuotas" muestra `cuotas` y `plazo`.
 
 ### Entregas (formas de pago)
 
@@ -124,8 +125,7 @@ Ver [docs/metodos-de-pago.md](./metodos-de-pago.md) para la referencia completa.
 | `descuento`      | BigDecimal | Descuento por ítem (opcional, default 0) |
 | `ivaTipo`        | int        | 1=Gravado, 3=Exento                      |
 | `iva`            | BigDecimal | Tasa de IVA: 5 ó 10                      |
-
-> Si `cantidad > 1`, el KUDE muestra `N x Descripción` en la columna de descripción.
+| `unidadMedida`   | int        | Código SET de unidad de medida (ej. `77` = UNI); se imprime su abreviatura en la columna U.M. |
 
 ---
 
@@ -204,12 +204,15 @@ Ver [docs/metodos-de-pago.md](./metodos-de-pago.md) para la referencia completa.
 
 ## Layout del KUDE generado
 
-El KUDE sigue el siguiente orden visual:
+El KUDE sigue el formato gráfico de la SET, en este orden:
 
-1. **Encabezado** — columna izquierda: logo + datos empresa; columna derecha: caja con tipo doc, RUC, timbrado, N° documento
-2. **Info de emisión** — fila izquierda: checkboxes `[X] Contado [ ] Crédito`, fecha, tipo transacción, cajero; fila derecha: datos del receptor, socio
-3. **Tabla de ítems** — columnas: `Cód. | Descripción | P. Unitario | Descuento | Exentas | 5% | 10%`
-   - Al final de la tabla, filas integradas de: SUBTOTAL, TOTAL DE LA OPERACIÓN (con monto en letras), LIQUIDACIÓN IVA
-4. **Forma de pago** — detalle de medios de pago utilizados
-5. **QR y CDC** — columna izquierda: imagen QR; columna derecha: link de validación + CDC
-6. **Pie** — "Información de interés del facturador electrónico emisor" + aviso 72 horas + "Página 1 de 1"
+1. **Banda de título** — "KuDE De Factura Electrónica" (o el tipo de documento que corresponda) sobre fondo gris.
+2. **Emisor** — izquierda: logo, razón social, dirección, ciudad, teléfono, email y actividad económica; derecha: RUC, Timbrado Nº, Fecha Inicio de Vigencia, tipo de documento y número `001-001-0000001`.
+3. **Emisión / receptor** — izquierda: fecha y hora de emisión, condición de venta con casillas Contado/Crédito (o motivo de emisión en NC/ND), cuotas, moneda, tipo de cambio y cajero; derecha: RUC/documento, nombre o razón social, dirección, teléfono, correo, tipo de transacción y socio.
+4. **Documento asociado** — solo NC/ND.
+5. **Grilla de ítems** — `Cod. | Descripción | U.M. | Cant. | Precio Unitario | Descuento | Cotización | Valor de Venta (Exentas | 5% | 10%)`. La grilla se estira hasta el pie de la página. Si los ítems no entran en una página, la grilla continúa en la siguiente con el encabezado de columnas repetido.
+6. **Totales** — SUBTOTAL, TOTAL DE LA OPERACIÓN, TOTAL EN GUARANÍES (solo PYG), LIQUIDACIÓN IVA (5% / 10% / total) y monto en letras (`SON GS. (GUARANIES): ...`).
+7. **QR y CDC** — QR a la izquierda; a la derecha, la leyenda de consulta en `www.ekuatia.set.gov.py/consultas`, el CDC en grupos de 4 dígitos y el aviso de representación gráfica / 72 horas. Si `estado` no es `APROBADO*`, se agrega en rojo "Estado SIFEN: <estado> (<código>)".
+8. **Nota al pie** — `data.observacion`, si se envía.
+
+Montos con separador de miles `.` y decimales `,` (`185.301,00`).

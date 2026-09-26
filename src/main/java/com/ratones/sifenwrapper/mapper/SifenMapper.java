@@ -191,7 +191,8 @@ public class SifenMapper {
 
         if (cliente == null) return receptor;
 
-        receptor.setiNatRec(cliente.isContribuyente() ? TiNatRec.CONTRIBUYENTE : TiNatRec.NO_CONTRIBUYENTE);
+        boolean contribuyente = cliente.isContribuyente();
+        receptor.setiNatRec(contribuyente ? TiNatRec.CONTRIBUYENTE : TiNatRec.NO_CONTRIBUYENTE);
         receptor.setiTiOpe(TiTiOpe.getByVal((short) cliente.getTipoOperacion()));
 
         if (cliente.getPais() != null) {
@@ -205,13 +206,23 @@ public class SifenMapper {
             receptor.setcPaisRec(PaisType.PRY);
         }
 
-        if (cliente.isContribuyente() && cliente.getRuc() != null) {
-            String[] rucReceptor = normalizeRucAndDv(cliente.getRuc());
-            receptor.setdRucRec(rucReceptor[0]);
-            receptor.setdDVRec(Short.parseShort(rucReceptor[1]));
+        // D205-D207 solo para contribuyente; D208-D210 solo para no contribuyente fuera
+        // de B2F (Manual Técnico v150, reglas 1302-1305 y 1310-1323). Mismo criterio con
+        // el que TgDatRec serializa el XML: así el bean no arrastra datos que no aplican.
+        if (contribuyente) {
+            if (cliente.getTipoContribuyente() > 0) {
+                receptor.setiTiContRec(TiTipCont.getByVal((short) cliente.getTipoContribuyente()));
+            }
+            if (cliente.getRuc() != null) {
+                String[] rucReceptor = normalizeRucAndDv(cliente.getRuc());
+                receptor.setdRucRec(rucReceptor[0]);
+                receptor.setdDVRec(Short.parseShort(rucReceptor[1]));
+            }
         }
 
-        Integer tipoDocumentoReceptor = resolveTipoDocumentoReceptor(cliente);
+        Integer tipoDocumentoReceptor = contribuyente || cliente.getTipoOperacion() == TiTiOpe.B2F.getVal()
+                ? null
+                : resolveTipoDocumentoReceptor(cliente);
         if (tipoDocumentoReceptor != null) {
             receptor.setiTipIDRec(TiTipDocRec.getByVal(tipoDocumentoReceptor.shortValue()));
             receptor.setdNumIDRec(resolveNumeroDocumentoReceptor(cliente, tipoDocumentoReceptor));
@@ -219,9 +230,6 @@ public class SifenMapper {
 
         receptor.setdNomRec(resolveNombreReceptor(cliente, tipoDocumentoReceptor));
         receptor.setdNomFanRec(cliente.getNombreFantasia());
-        if (cliente.getTipoContribuyente() > 0) {
-            receptor.setiTiContRec(TiTipCont.getByVal((short) cliente.getTipoContribuyente()));
-        }
         receptor.setdDirRec(cliente.getDireccion());
         if (cliente.getNumeroCasa() != null) {
             try {

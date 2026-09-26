@@ -28,6 +28,7 @@ import java.util.Map;
 public class InvoiceEmailService {
 
     private static final String RESEND_BASE_URL = "https://api.resend.com";
+    private static final String SUBJECT = "¡Su documento electrónico está listo!";
 
     private final ObjectMapper objectMapper;
     private final ResendProperties resendProperties;
@@ -54,20 +55,12 @@ public class InvoiceEmailService {
 
         String cliente = text(root.path("data").path("cliente").path("razonSocial"));
         String titulo = nombreDocumento(doc.getTipoDocumento());
-        String subject = titulo + " aprobada - CDC " + doc.getCdc();
-        String html = buildHtmlBody(
-                titulo,
-                cliente,
-                doc.getCdc(),
-                doc.getEstado(),
-                doc.getSifenCodigo(),
-                doc.getSifenMensaje(),
-                doc.getQrUrl());
-        String text = buildTextBody(titulo, doc.getCdc(), doc.getEstado(), doc.getSifenCodigo(), doc.getSifenMensaje(), doc.getQrUrl());
+        String html = buildHtmlBody(titulo, cliente, doc.getCdc(), doc.getQrUrl());
+        String text = buildTextBody(titulo, cliente, doc.getCdc(), doc.getQrUrl());
 
         byte[] kude = generarKudeSilencioso(root, doc.getCdc(), doc.getQrUrl(), doc.getEstado(),
                 doc.getSifenCodigo(), doc.getSifenMensaje());
-        return sendEmail(recipients.toEmail(), recipients.ccEmails(), subject, html, text, kude,
+        return sendEmail(recipients.toEmail(), recipients.ccEmails(), SUBJECT, html, text, kude,
                 "kude-" + doc.getCdc() + ".pdf");
     }
 
@@ -87,20 +80,11 @@ public class InvoiceEmailService {
 
         String cliente = request.getData().getCliente().getRazonSocial();
         String titulo = nombreDocumento((short) request.getData().getTipoDocumento());
-        String subject = titulo + " aprobada - CDC " + response.getCdc();
-        String html = buildHtmlBody(
-                titulo,
-                cliente,
-                response.getCdc(),
-                response.getEstado(),
-                response.getCodigoEstado(),
-                response.getDescripcionEstado(),
-                response.getQrUrl());
-        String text = buildTextBody(titulo, response.getCdc(), response.getEstado(), response.getCodigoEstado(),
-                response.getDescripcionEstado(), response.getQrUrl());
+        String html = buildHtmlBody(titulo, cliente, response.getCdc(), response.getQrUrl());
+        String text = buildTextBody(titulo, cliente, response.getCdc(), response.getQrUrl());
 
         byte[] kude = generarKudeSilenciosoDesdeRequest(request, response);
-        return sendEmail(recipients.toEmail(), recipients.ccEmails(), subject, html, text, kude,
+        return sendEmail(recipients.toEmail(), recipients.ccEmails(), SUBJECT, html, text, kude,
                 "kude-" + response.getCdc() + ".pdf");
     }
 
@@ -287,59 +271,53 @@ public class InvoiceEmailService {
 
     /** 1=Factura, 4=Autofactura, 5=Nota de Crédito, 6=Nota de Débito, 7=Nota de Remisión. */
     private String nombreDocumento(Short tipoDocumento) {
-        if (tipoDocumento == null) return "Factura";
+        if (tipoDocumento == null) return "Factura Electrónica";
         return switch (tipoDocumento.intValue()) {
-            case 1 -> "Factura";
-            case 4 -> "Autofactura";
-            case 5 -> "Nota de Crédito";
-            case 6 -> "Nota de Débito";
-            case 7 -> "Nota de Remisión";
-            default -> "Documento electrónico";
+            case 1 -> "Factura Electrónica";
+            case 4 -> "Autofactura Electrónica";
+            case 5 -> "Nota de Crédito Electrónica";
+            case 6 -> "Nota de Débito Electrónica";
+            case 7 -> "Nota de Remisión Electrónica";
+            default -> "Documento Electrónico";
         };
     }
 
-    private String buildHtmlBody(String tituloDocumento,
-                                 String cliente,
-                                 String cdc,
-                                 String estado,
-                                 String codigo,
-                                 String mensaje,
-                                 String qrUrl) {
-        String nombre = (cliente == null || cliente.isBlank()) ? "cliente" : cliente;
+    private String buildHtmlBody(String tituloDocumento, String cliente, String cdc, String qrUrl) {
+        String qrLinea = (qrUrl == null || qrUrl.isBlank())
+                ? ""
+                : "<p><strong>QR:</strong> <a href=\"%s\">Ver comprobante</a></p>".formatted(escapeHtml(qrUrl));
         return """
                 <html>
                   <body style=\"font-family: Arial, sans-serif; color: #111;\">
-                    <h2>%s aprobada por SIFEN</h2>
-                    <p>Hola %s,</p>
-                    <p>Tu documento fue procesado correctamente.</p>
+                    <p>¡Hola, %s!</p>
+                    <p>Te enviamos este correo para informarte que tu %s fue procesada correctamente.</p>
                     <ul>
                       <li><strong>CDC:</strong> %s</li>
-                      <li><strong>Estado:</strong> %s</li>
-                      <li><strong>Código SIFEN:</strong> %s</li>
-                      <li><strong>Detalle:</strong> %s</li>
                     </ul>
-                    <p><strong>QR:</strong> <a href=\"%s\">Ver comprobante</a></p>
-                    <p>Este correo fue generado automáticamente por SYNCTEMA.</p>
+                    <p>¡Descárgala para poder visualizarla!</p>
+                    %s
+                    <p style=\"color: #666; font-size: 12px;\">Este correo fue generado automáticamente por Ratones.dev</p>
                   </body>
                 </html>
                 """.formatted(
+                escapeHtml(nombreCliente(cliente)),
                 escapeHtml(tituloDocumento),
-                escapeHtml(nombre),
-                safe(cdc),
-                safe(estado),
-                safe(codigo),
-                safe(mensaje),
-                safe(qrUrl)
+                escapeHtml(safe(cdc)),
+                qrLinea
         );
     }
 
-    private String buildTextBody(String tituloDocumento, String cdc, String estado, String codigo, String mensaje, String qrUrl) {
-        return tituloDocumento + " aprobada por SIFEN\n"
-                + "CDC: " + safe(cdc) + "\n"
-                + "Estado: " + safe(estado) + "\n"
-                + "Codigo SIFEN: " + safe(codigo) + "\n"
-                + "Detalle: " + safe(mensaje) + "\n"
-                + "QR: " + safe(qrUrl);
+    private String buildTextBody(String tituloDocumento, String cliente, String cdc, String qrUrl) {
+        return "¡Hola, " + nombreCliente(cliente) + "!\n\n"
+                + "Te enviamos este correo para informarte que tu " + tituloDocumento + " fue procesada correctamente.\n\n"
+                + "* CDC: " + safe(cdc) + "\n\n"
+                + "¡Descárgala para poder visualizarla!\n"
+                + (qrUrl == null || qrUrl.isBlank() ? "" : "QR: " + qrUrl + "\n")
+                + "\nEste correo fue generado automáticamente por Ratones.dev";
+    }
+
+    private String nombreCliente(String cliente) {
+        return (cliente == null || cliente.isBlank()) ? "cliente" : cliente.trim();
     }
 
     private String safe(String value) {
